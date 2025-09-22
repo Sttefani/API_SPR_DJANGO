@@ -3,38 +3,26 @@
 from rest_framework.permissions import BasePermission, IsAuthenticated
 from usuarios.permissions import IsSuperAdminUser
 
+
 class OcorrenciaPermission(BasePermission):
     """
-    Permissão customizada para o modelo Ocorrencia:
-    - Apenas perfis autorizados (não-administrativos) podem criar (POST).
-    - O perfil Administrativo só pode visualizar (GET).
-    - Apenas Super Admin pode deletar (DELETE).
-    - Regras de edição são tratadas no serializer.
+    Permissão principal para a OcorrenciaViewSet.
     """
     def has_permission(self, request, view):
-        # Primeiro, garante que o usuário está logado
+        # Barreira 1: Precisa estar logado para qualquer ação.
         if not IsAuthenticated().has_permission(request, view):
             return False
 
-        # Se o método for de leitura (GET, HEAD, OPTIONS), todos os logados podem ver
-        if request.method in ['GET', 'HEAD', 'OPTIONS']:
-            return True
-
-        # Se for para criar (POST), o perfil não pode ser ADMINISTRATIVO
+        # Barreira 2: Apenas Super Admin pode deletar.
+        if request.method == 'DELETE':
+            return IsSuperAdminUser().has_permission(request, view)
+        
+        # Barreira 3: O perfil ADMINISTRATIVO não pode criar.
         if request.method == 'POST':
-            # Super Admin também não é ADMINISTRATIVO, então passa.
             return request.user.perfil != 'ADMINISTRATIVO'
 
-        # Se for para editar (PUT/PATCH) ou deletar (DELETE), permite a princípio
-        # para que a lógica mais específica na View ou Serializer possa agir.
-        # A deleção será efetivamente barrada para não-Super Admins pelo Serializer/View se necessário.
-        if request.method in ['PUT', 'PATCH', 'DELETE']:
-            # Vamos refinar a regra de DELETE aqui para ser explícita
-            if request.method == 'DELETE':
-                return IsSuperAdminUser().has_permission(request, view)
-            return True # Permite PUT/PATCH para que a lógica do serializer decida
-
-        return False
+        # Permite outras ações como GET, PUT, PATCH para a lógica do serializer decidir.
+        return True
 
 
 class PodeFinalizarOcorrencia(BasePermission):
@@ -44,3 +32,38 @@ class PodeFinalizarOcorrencia(BasePermission):
     def has_permission(self, request, view):
         user = request.user
         return user.is_authenticated and (user.perfil in ['ADMINISTRATIVO', 'SUPER_ADMIN'])
+
+
+class PodeReabrirOcorrencia(BasePermission):
+    """
+    Permite a ação de reabrir apenas para Super Admin.
+    """
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.is_superuser
+
+
+class PodeEditarOcorrencia(BasePermission):
+    """
+    Permissão específica para edição baseada no objeto.
+    """
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        if user.is_superuser:
+            return True
+        if user.perfil == 'ADMINISTRATIVO':
+            return True # A lógica do que ele pode editar está no serializer
+        if obj.perito_atribuido:
+            return user.id == obj.perito_atribuido.id
+        return user.perfil in ['PERITO', 'OPERACIONAL']
+    
+    
+class PeritoAtribuidoRequired(BasePermission):
+    """
+    Permissão que verifica se a ocorrência (o 'obj') já tem um perito atribuído.
+    """
+    message = "É necessário atribuir um perito à ocorrência antes de gerenciar os exames."
+
+    def has_object_permission(self, request, view, obj):
+        # 'obj' aqui é a instância da ocorrência que estamos tentando acessar.
+        # A permissão é concedida se o campo 'perito_atribuido' não for nulo.
+        return obj.perito_atribuido is not None

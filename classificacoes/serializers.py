@@ -3,10 +3,10 @@
 from rest_framework import serializers
 from .models import ClassificacaoOcorrencia
 from rest_framework.validators import UniqueValidator
+from usuarios.serializers import UserNestedSerializer # Importa para o 'deleted_by'
 
 # -----------------------------------------------------------------------------
-# Serializer "miniatura" para aninhamento (mostrar detalhes do pai)
-# Ele é usado para exibir as informações do "parent" de forma legível.
+# SERIALIZER ANINHADO (JÁ ESTAVA CORRETO)
 # -----------------------------------------------------------------------------
 class ClassificacaoOcorrenciaNestedSerializer(serializers.ModelSerializer):
     class Meta:
@@ -14,16 +14,10 @@ class ClassificacaoOcorrenciaNestedSerializer(serializers.ModelSerializer):
         fields = ['id', 'codigo', 'nome']
 
 # -----------------------------------------------------------------------------
-# Serializer principal, usado para criar, editar e ver os detalhes.
+# SERIALIZER PRINCIPAL (AGORA USANDO ModelSerializer)
 # -----------------------------------------------------------------------------
-class ClassificacaoOcorrenciaSerializer(serializers.HyperlinkedModelSerializer):
-    url = serializers.HyperlinkedIdentityField(view_name="classificacaoocorrencia-detail")
-
-    # Para LEITURA: Mostra os detalhes do grupo pai usando o serializer aninhado.
+class ClassificacaoOcorrenciaSerializer(serializers.ModelSerializer):
     parent = ClassificacaoOcorrenciaNestedSerializer(read_only=True)
-
-    # Para ESCRITA: Cria um campo 'parent_id' que só aceita IDs de grupos principais.
-    # Este campo gera o <select> (dropdown) no formulário da API de teste.
     parent_id = serializers.PrimaryKeyRelatedField(
         queryset=ClassificacaoOcorrencia.objects.filter(parent__isnull=True),
         source='parent',
@@ -32,8 +26,6 @@ class ClassificacaoOcorrenciaSerializer(serializers.HyperlinkedModelSerializer):
         allow_null=True,
         label='Grupo Pai'
     )
-
-    # Campos com validação de unicidade explícita
     codigo = serializers.CharField(
         max_length=20,
         validators=[UniqueValidator(queryset=ClassificacaoOcorrencia.objects.all(), message="Já existe uma classificação com este código.")]
@@ -45,26 +37,27 @@ class ClassificacaoOcorrenciaSerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = ClassificacaoOcorrencia
+        # O campo 'url' foi removido
         fields = [
-            'url',
             'id',
             'codigo',
             'nome',
-            'parent',       # Campo de leitura (mostra o objeto pai)
-            'parent_id',    # Campo de escrita (recebe o ID do pai)
+            'parent',
+            'parent_id',
             'created_at',
             'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
 
 # -----------------------------------------------------------------------------
-# Serializer para a Lixeira, mostra apenas os campos relevantes.
+# SERIALIZER DA LIXEIRA (AGORA USANDO ModelSerializer)
 # -----------------------------------------------------------------------------
-class ClassificacaoOcorrenciaLixeiraSerializer(serializers.HyperlinkedModelSerializer):
-    url = serializers.HyperlinkedIdentityField(view_name="classificacaoocorrencia-detail")
+class ClassificacaoOcorrenciaLixeiraSerializer(serializers.ModelSerializer):
     parent = ClassificacaoOcorrenciaNestedSerializer(read_only=True)
+    deleted_by = UserNestedSerializer(read_only=True)
 
     class Meta:
         model = ClassificacaoOcorrencia
-        fields = ['url', 'id', 'codigo', 'nome', 'parent', 'deleted_at']
-        read_only_fields = ['deleted_at']
+        # O campo 'url' foi removido
+        fields = ['id', 'codigo', 'nome', 'parent', 'deleted_at', 'deleted_by']
+        read_only_fields = ['deleted_at', 'deleted_by']

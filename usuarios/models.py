@@ -124,4 +124,4 @@ class User(AbstractUser, AuditModel):
     objects = UserManager() # Vincula nosso gerenciador personalizado
 
     def __str__(self):
-        return self.email
+        return self.nome_completo

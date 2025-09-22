@@ -3,25 +3,22 @@
 from rest_framework import serializers
 from .models import ProcedimentoCadastrado, Procedimento
 from procedimentos.serializers import ProcedimentoSerializer
+from usuarios.serializers import UserNestedSerializer # Importa para o 'deleted_by'
 
-
-class ProcedimentoCadastradoSerializer(serializers.HyperlinkedModelSerializer):
-    url = serializers.HyperlinkedIdentityField(view_name="procedimentocadastrado-detail")
-
-    # Para LEITURA: Mostra os detalhes do tipo de procedimento
+# -----------------------------------------------------------------------------
+# SERIALIZER PRINCIPAL (AGORA USANDO ModelSerializer)
+# -----------------------------------------------------------------------------
+class ProcedimentoCadastradoSerializer(serializers.ModelSerializer):
     tipo_procedimento = ProcedimentoSerializer(read_only=True)
-
-    # Para ESCRITA: Usa o ID do tipo para criar/atualizar
     tipo_procedimento_id = serializers.PrimaryKeyRelatedField(
         queryset=Procedimento.objects.all(), source='tipo_procedimento', write_only=True, label='Tipo de Procedimento'
     )
 
-    # O campo 'ano' agora é simples, sem 'default'. A View vai cuidar disso.
-
     class Meta:
         model = ProcedimentoCadastrado
+        # O campo 'url' foi removido
         fields = [
-            'url', 'id', 'tipo_procedimento', 'numero', 'ano',
+            'id', 'tipo_procedimento', 'numero', 'ano',
             'tipo_procedimento_id', 'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
@@ -33,12 +30,16 @@ class ProcedimentoCadastradoSerializer(serializers.HyperlinkedModelSerializer):
             )
         ]
 
-
-class ProcedimentoCadastradoLixeiraSerializer(serializers.HyperlinkedModelSerializer):
-    url = serializers.HyperlinkedIdentityField(view_name="procedimentocastrado-detail")
+# -----------------------------------------------------------------------------
+# SERIALIZER DA LIXEIRA (AGORA USANDO ModelSerializer)
+# -----------------------------------------------------------------------------
+class ProcedimentoCadastradoLixeiraSerializer(serializers.ModelSerializer):
     tipo_procedimento = ProcedimentoSerializer(read_only=True)
+    deleted_by = UserNestedSerializer(read_only=True)
 
     class Meta:
         model = ProcedimentoCadastrado
-        fields = ['url', 'id', 'tipo_procedimento', 'numero', 'ano', 'deleted_at']
-        read_only_fields = ['deleted_at']
+        # O campo 'url' foi removido
+        fields = ['id', 'tipo_procedimento', 'numero', 'ano', 'deleted_at', 'deleted_by']
+        read_only_fields = ['deleted_at', 'deleted_by']
+

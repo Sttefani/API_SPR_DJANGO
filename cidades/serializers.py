@@ -2,13 +2,16 @@
 
 from rest_framework import serializers
 from .models import Cidade
-from rest_framework.validators import UniqueValidator  # <-- Garanta que este import está aqui
+from rest_framework.validators import UniqueValidator
+from usuarios.serializers import UserNestedSerializer 
 
 
-class CidadeSerializer(serializers.HyperlinkedModelSerializer):
-    url = serializers.HyperlinkedIdentityField(view_name="cidade-detail")
+# -----------------------------------------------------------------------------
+# SERIALIZER PRINCIPAL (AGORA USANDO ModelSerializer)
+# -----------------------------------------------------------------------------
 
-    # AQUI ESTÁ A ADIÇÃO DO VALIDADOR EXPLÍCITO
+
+class CidadeSerializer(serializers.ModelSerializer):
     nome = serializers.CharField(
         max_length=100,
         validators=[
@@ -21,14 +24,21 @@ class CidadeSerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = Cidade
-        fields = ['url', 'id', 'nome', 'created_at', 'updated_at']
+        # O campo 'url' foi removido
+        fields = ['id', 'nome', 'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at']
 
+# -----------------------------------------------------------------------------
+# SERIALIZER DA LIXEIRA (COM 'deleted_by' CORRIGIDO)
+# -----------------------------------------------------------------------------
 
-class CidadeLixeiraSerializer(serializers.HyperlinkedModelSerializer):
-    url = serializers.HyperlinkedIdentityField(view_name="cidade-detail")
+
+class CidadeLixeiraSerializer(serializers.ModelSerializer):
+    # Mostra os detalhes do usuário que deletou, em vez de um ID
+    deleted_by = UserNestedSerializer(read_only=True)
 
     class Meta:
         model = Cidade
-        fields = ['url', 'id', 'nome', 'deleted_at']
-        read_only_fields = ['deleted_at']
+        # O campo 'url' foi removido
+        fields = ['id', 'nome', 'deleted_at', 'deleted_by']
+        read_only_fields = ['deleted_at', 'deleted_by']

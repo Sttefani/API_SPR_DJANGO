@@ -1,9 +1,13 @@
 from django.db import models
-from usuarios.models import AuditModel # Reutilizando nosso modelo base de auditoria
+from usuarios.models import AuditModel 
+
+
 
 class Cidade(AuditModel):
     nome = models.CharField(max_length=100, unique=True, help_text="Nome da cidade.")
 
+    def __str__(self):
+            return self.nome
 
     def save(self, *args, **kwargs):
         self.nome = self.nome.upper()

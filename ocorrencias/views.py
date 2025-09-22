@@ -1,51 +1,92 @@
 # ocorrencias/views.py
-
 from rest_framework import viewsets, status
+from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.decorators import action, permission_classes
-import datetime
-from django.utils import timezone  # Importe o timezone do Django
-from .models import Ocorrencia
-from .serializers import OcorrenciaListSerializer, OcorrenciaDetailSerializer, OcorrenciaUpdateSerializer
-from .permissions import OcorrenciaPermission, PodeFinalizarOcorrencia
+from django.utils import timezone
+from django.db.models import Q
 
+from .models import Ocorrencia
+
+from .serializers import (
+    OcorrenciaCreateSerializer,
+    OcorrenciaListSerializer, 
+    OcorrenciaDetailSerializer,
+    OcorrenciaUpdateSerializer,
+    OcorrenciaLixeiraSerializer, 
+    FinalizarComAssinaturaSerializer,
+    ReabrirOcorrenciaSerializer
+)
+
+from .permissions import (
+    OcorrenciaPermission, 
+    PodeEditarOcorrencia, 
+    PodeFinalizarOcorrencia, 
+    PodeReabrirOcorrencia,
+    PeritoAtribuidoRequired
+)
+from .filters import OcorrenciaFilter
 
 class OcorrenciaViewSet(viewsets.ModelViewSet):
     """
     Endpoint da API para gerenciar Ocorrências.
     """
-    queryset = Ocorrencia.all_objects.select_related(
-        'servico_pericial', 'unidade_demandante', 'autoridade', 'cidade', 'classificacao', 'created_by'
-    ).prefetch_related('exames_solicitados').all()
-
-    permission_classes = [OcorrenciaPermission]
-    filterset_fields = [
-        'numero_ocorrencia', 'status', 'servico_pericial', 'unidade_demandante',
-        'autoridade', 'cidade', 'perito_atribuido'
-    ]
-
+    queryset = Ocorrencia.all_objects.all()
+    permission_classes = [OcorrenciaPermission] # Permissão Padrão
+    filterset_class = OcorrenciaFilter
+    search_fields = ['numero_ocorrencia', 'perito_atribuido__nome_completo', 'autoridade__nome']
+    
+    def get_permissions(self):
+        """
+        Define as permissões corretas para cada ação.
+        """
+        if self.action in ['adicionar_exames', 'remover_exames']:
+            return [PeritoAtribuidoRequired()]
+        if self.action == 'finalizar':
+            return [PodeFinalizarOcorrencia()]
+        if self.action == 'reabrir':
+            return [PodeReabrirOcorrencia()]
+        if self.action in ['update', 'partial_update']:
+            return [PodeEditarOcorrencia()]
+        
+        return [permission() for permission in self.permission_classes]
+    
     def get_serializer_class(self):
-        if self.action == 'list':
+        if self.action in ['list', 'finalizadas', 'pendentes']:
             return OcorrenciaListSerializer
+        if self.action == 'lixeira':
+            return OcorrenciaLixeiraSerializer
+        if self.action == 'finalizar':
+            return FinalizarComAssinaturaSerializer
+        if self.action == 'reabrir':
+            return ReabrirOcorrenciaSerializer
         if self.action in ['update', 'partial_update']:
             return OcorrenciaUpdateSerializer
+        if self.action == 'create':
+            return OcorrenciaCreateSerializer
+        
+        # Para retrieve (visualização)
         return OcorrenciaDetailSerializer
 
     def get_queryset(self):
         user = self.request.user
-        # O queryset base já é definido na classe, aqui apenas aplicamos o filtro de permissão
+        queryset = super().get_queryset()
+        
         if user.is_superuser or user.perfil == 'ADMINISTRATIVO':
-            return self.queryset
-
-        # Outros perfis veem apenas ocorrências dos seus serviços periciais
-        return self.queryset.filter(servico_pericial__in=user.servicos_periciais.all())
+            if self.action != 'lixeira':
+                 queryset = queryset.filter(deleted_at__isnull=True)
+            return queryset
+        
+        return queryset.filter(
+            servico_pericial__in=user.servicos_periciais.all(),
+            deleted_at__isnull=True
+        )
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
-
+    
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
-
+    
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         instance.soft_delete(user=self.request.user)
@@ -63,17 +104,258 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         instance.restore()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
-
-    @action(detail=True, methods=['post'])
-    @permission_classes([PodeFinalizarOcorrencia])
+    
+    @action(detail=True, methods=['get', 'post'])
     def finalizar(self, request, pk=None):
         ocorrencia = self.get_object()
-        if ocorrencia.status == 'FINALIZADA':
-            return Response({'detail': 'Esta ocorrência já está finalizada.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        ocorrencia.status = Ocorrencia.Status.FINALIZADA
-        ocorrencia.data_finalizacao = timezone.now()
-        ocorrencia.save()
-
-        serializer = self.get_serializer(ocorrencia)
+        if request.method == 'POST':
+            if ocorrencia.esta_finalizada:
+                return Response({'error': 'Esta ocorrência já foi finalizada.'}, status=status.HTTP_400_BAD_REQUEST)
+            serializer = self.get_serializer(data=request.data)
+            if serializer.is_valid():
+                ip_address = request.META.get('REMOTE_ADDR', '127.0.0.1')
+                ocorrencia.finalizar_com_assinatura(request.user, ip_address)
+                response_serializer = OcorrenciaDetailSerializer(ocorrencia, context={'request': request})
+                return Response({'message': 'Ocorrência finalizada com sucesso.', 'ocorrencia': response_serializer.data}, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer = self.get_serializer(instance=ocorrencia)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['get', 'post'])
+    def reabrir(self, request, pk=None):
+        ocorrencia = self.get_object()
+        if request.method == 'POST':
+            if not ocorrencia.esta_finalizada:
+                return Response({'error': 'Esta ocorrência não está finalizada.'}, status=status.HTTP_400_BAD_REQUEST)
+            serializer = self.get_serializer(data=request.data)
+            if serializer.is_valid():
+                ip_address = request.META.get('REMOTE_ADDR', '127.0.0.1')
+                motivo = serializer.validated_data.get('motivo_reabertura')
+                ocorrencia.reabrir(request.user, motivo, ip_address)
+                response_serializer = OcorrenciaDetailSerializer(ocorrencia, context={'request': request})
+                return Response({'message': 'Ocorrência reaberta com sucesso.', 'ocorrencia': response_serializer.data}, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer = self.get_serializer(instance=ocorrencia)
+        return Response(serializer.data)
+        
+    @action(detail=True, methods=['patch'])
+    def atribuir_perito(self, request, pk=None):
+        ocorrencia = self.get_object()
+        if ocorrencia.esta_finalizada:
+            return Response({'error': 'Não é possível atribuir perito a uma ocorrência finalizada.'}, status=status.HTTP_400_BAD_REQUEST)
+        perito_id = request.data.get('perito_id')
+        if not perito_id:
+            return Response({'error': 'perito_id é obrigatório.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            from usuarios.models import User
+            perito = User.objects.get(id=perito_id, perfil='PERITO')
+            if ocorrencia.perito_atribuido and not request.user.is_superuser:
+                return Response({'error': 'Apenas super administradores podem alterar o perito já atribuído.'}, status=status.HTTP_403_FORBIDDEN)
+            ocorrencia.perito_atribuido = perito
+            ocorrencia.updated_by = request.user
+            ocorrencia.save()
+            serializer = self.get_serializer(ocorrencia)
+            return Response({'message': f'Perito {perito.nome_completo} atribuído com sucesso.', 'ocorrencia': serializer.data})
+        except User.DoesNotExist:
+            return Response({'error': 'Perito não encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=False, methods=['get'])
+    def finalizadas(self, request):
+        queryset = self.get_queryset().filter(status='FINALIZADA', finalizada_por__isnull=False).order_by('-data_assinatura_finalizacao')
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({'count': queryset.count(), 'results': serializer.data})
+    
+    @action(detail=False, methods=['get'])
+    def pendentes(self, request):
+        queryset = self.get_queryset().exclude(status='FINALIZADA').order_by('-created_at')
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({'count': queryset.count(), 'results': serializer.data})
+    
+    @action(detail=True, methods=['get'])
+    def historico_assinatura(self, request, pk=None):
+        ocorrencia = self.get_object()
+        if not ocorrencia.esta_finalizada:
+            return Response({'error': 'Esta ocorrência não foi finalizada ainda.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'numero_ocorrencia': ocorrencia.numero_ocorrencia,
+            'assinatura_digital': { 'finalizada_por': {'id': ocorrencia.finalizada_por.id, 'nome': ocorrencia.finalizada_por.nome_completo, 'perfil': ocorrencia.finalizada_por.perfil}, 'data_assinatura': ocorrencia.data_assinatura_finalizacao, 'ip_origem': ocorrencia.ip_assinatura_finalizacao },
+        })
+
+    # ===== ACTIONS DE EXAMES =====
+    @action(detail=True, methods=['post'])
+    def adicionar_exames(self, request, pk=None):
+        ocorrencia = self.get_object()
+        
+        if ocorrencia.esta_finalizada:
+            return Response(
+                {"error": "Não é possível alterar exames de uma ocorrência finalizada."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user = request.user
+        if ocorrencia.perito_atribuido:
+            if not user.is_superuser and user.id != ocorrencia.perito_atribuido.id:
+                return Response(
+                    {"error": "Apenas o perito atribuído pode alterar os exames desta ocorrência."}, 
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        
+        exames_ids = request.data.get('exames_ids', [])
+        if not isinstance(exames_ids, list):
+            return Response({"error": "O campo 'exames_ids' deve ser uma lista de IDs."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Validação de IDs existentes
+        if exames_ids:
+            from exames.models import Exame
+            existing_ids = list(Exame.objects.filter(id__in=exames_ids).values_list('id', flat=True))
+            invalid_ids = set(exames_ids) - set(existing_ids)
+            if invalid_ids:
+                return Response(
+                    {"error": f"Exames inválidos: {list(invalid_ids)}"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        ocorrencia.exames_solicitados.add(*exames_ids)
+        serializer = OcorrenciaDetailSerializer(ocorrencia, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def remover_exames(self, request, pk=None):
+        ocorrencia = self.get_object()
+        
+        if ocorrencia.esta_finalizada:
+            return Response(
+                {"error": "Não é possível alterar exames de uma ocorrência finalizada."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user = request.user
+        if ocorrencia.perito_atribuido:
+            if not user.is_superuser and user.id != ocorrencia.perito_atribuido.id:
+                return Response(
+                    {"error": "Apenas o perito atribuído pode alterar os exames desta ocorrência."}, 
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        
+        exames_ids = request.data.get('exames_ids', [])
+        if not isinstance(exames_ids, list):
+            return Response({"error": "O campo 'exames_ids' deve ser uma lista de IDs."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Validação: IDs vinculados à ocorrência
+        if exames_ids:
+            exames_atuais = list(ocorrencia.exames_solicitados.values_list('id', flat=True))
+            ids_nao_vinculados = set(exames_ids) - set(exames_atuais)
+            if ids_nao_vinculados:
+                return Response(
+                    {"error": f"Exames não vinculados à ocorrência: {list(ids_nao_vinculados)}"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        ocorrencia.exames_solicitados.remove(*exames_ids)
+        serializer = OcorrenciaDetailSerializer(ocorrencia, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def definir_exames(self, request, pk=None):
+        """Define todos os exames da ocorrência substituindo os existentes"""
+        ocorrencia = self.get_object()
+        
+        if ocorrencia.esta_finalizada:
+            return Response(
+                {"error": "Não é possível alterar exames de uma ocorrência finalizada."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user = request.user
+        if ocorrencia.perito_atribuido:
+            if not user.is_superuser and user.id != ocorrencia.perito_atribuido.id:
+                return Response(
+                    {"error": "Apenas o perito atribuído pode alterar os exames desta ocorrência."}, 
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        
+        exames_ids = request.data.get('exames_ids', [])
+        
+        if not isinstance(exames_ids, list):
+            return Response(
+                {"error": "O campo 'exames_ids' deve ser uma lista de IDs."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validação de IDs existentes
+        if exames_ids:
+            from exames.models import Exame
+            existing_ids = list(Exame.objects.filter(id__in=exames_ids).values_list('id', flat=True))
+            invalid_ids = set(exames_ids) - set(existing_ids)
+            if invalid_ids:
+                return Response(
+                    {"error": f"Exames inválidos: {list(invalid_ids)}"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        ocorrencia.exames_solicitados.set(exames_ids)
+        
+        serializer = OcorrenciaDetailSerializer(ocorrencia, context={'request': request})
+        return Response({
+            'message': f'{len(exames_ids)} exames definidos para a ocorrência.',
+            'ocorrencia': serializer.data
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'])
+    def exames_disponiveis(self, request):
+        """Lista exames disponíveis com filtros para seleção"""
+        from exames.models import Exame
+        
+        search = request.GET.get('search', '')
+        servico_pericial_id = request.GET.get('servico_pericial_id', '')
+        page_size = int(request.GET.get('page_size', 20))
+        page = int(request.GET.get('page', 1))
+        
+        queryset = Exame.objects.all().order_by('codigo')
+        
+        if search:
+            queryset = queryset.filter(
+                Q(nome__icontains=search) | Q(codigo__icontains=search)
+            )
+        
+        if servico_pericial_id:
+            queryset = queryset.filter(servico_pericial_id=servico_pericial_id)
+        
+        # Paginação
+        total = queryset.count()
+        start = (page - 1) * page_size
+        end = start + page_size
+        exames = queryset[start:end]
+        
+        from exames.serializers import ExameNestedSerializer
+        serializer = ExameNestedSerializer(exames, many=True)
+        
+        return Response({
+            'exames': serializer.data,
+            'pagination': {
+                'count': total,
+                'page': page,
+                'page_size': page_size,
+                'total_pages': (total + page_size - 1) // page_size,
+                'has_next': end < total,
+                'has_previous': page > 1
+            }
+        })
+
+    @action(detail=True, methods=['get'])
+    def exames_atuais(self, request, pk=None):
+        """Mostra exames atualmente vinculados à ocorrência"""
+        ocorrencia = self.get_object()
+        
+        from exames.serializers import ExameNestedSerializer
+        serializer = ExameNestedSerializer(
+            ocorrencia.exames_solicitados.all().order_by('codigo'), 
+            many=True
+        )
+        
+        return Response({
+            'ocorrencia_id': ocorrencia.id,
+            'numero_ocorrencia': ocorrencia.numero_ocorrencia,
+            'exames_atuais': serializer.data,
+            'total_exames': ocorrencia.exames_solicitados.count()
+        })

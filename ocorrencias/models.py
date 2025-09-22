@@ -3,6 +3,7 @@
 import datetime
 from django.db import models
 from django.conf import settings
+from django.utils import timezone  # ADICIONADO
 
 # Importando os modelos dos nossos outros apps
 from usuarios.models import AuditModel
@@ -26,13 +27,16 @@ class Ocorrencia(AuditModel):
         max_length=30, unique=True, editable=False, verbose_name="Número da Ocorrência (OC)"
     )
     servico_pericial = models.ForeignKey(
-        ServicoPericial, on_delete=models.PROTECT, related_name="ocorrencias", verbose_name="Serviço Pericial"
+        ServicoPericial, on_delete=models.PROTECT,
+        related_name="ocorrencias", verbose_name="Serviço Pericial"
     )
     unidade_demandante = models.ForeignKey(
-        UnidadeDemandante, on_delete=models.PROTECT, related_name="ocorrencias", verbose_name="Unidade Demandante"
+        UnidadeDemandante, on_delete=models.PROTECT,
+        related_name="ocorrencias", verbose_name="Unidade Demandante"
     )
     autoridade = models.ForeignKey(
-        Autoridade, on_delete=models.PROTECT, related_name="ocorrencias", verbose_name="Autoridade Demandante"
+        Autoridade, on_delete=models.PROTECT, related_name="ocorrencias",
+        verbose_name="Autoridade Demandante"
     )
     data_fato = models.DateField(verbose_name="Data do Fato")
     hora_fato = models.TimeField(null=True, blank=True, verbose_name="Hora do Fato")
@@ -43,22 +47,22 @@ class Ocorrencia(AuditModel):
         verbose_name="Classificação da Ocorrência"
     )
     procedimento_cadastrado = models.ForeignKey(
-        ProcedimentoCadastrado, on_delete=models.SET_NULL, null=True, blank=True, related_name="ocorrencias",
-        verbose_name="Procedimento"
+        ProcedimentoCadastrado, on_delete=models.SET_NULL, null=True, blank=True, 
+        related_name="ocorrencias", verbose_name="Procedimento"
     )
     tipo_documento_origem = models.ForeignKey(
-        TipoDocumento, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="Tipo de Documento de Origem"
+        TipoDocumento, on_delete=models.SET_NULL, null=True, blank=True, 
+        verbose_name="Tipo de Documento de Origem"
     )
-    numero_documento_origem = models.CharField(max_length=50, null=True, blank=True,
-                                               verbose_name="Número do Documento de Origem")
-    ano_documento_origem = models.PositiveIntegerField(null=True, blank=True, verbose_name="Ano do Documento de Origem")
-    data_documento_origem = models.DateField(null=True, blank=True, verbose_name="Data do Documento de Origem")
-
-    # NOVO CAMPO ADICIONADO AQUI
+    numero_documento_origem = models.CharField(
+        max_length=50, null=True, blank=True, verbose_name="Número do Documento de Origem"
+    )
+    data_documento_origem = models.DateField(
+        null=True, blank=True, verbose_name="Data do Documento de Origem"
+    )
     processo_sei_numero = models.CharField(
         max_length=50, null=True, blank=True, verbose_name="Número do Processo SEI"
     )
-
     perito_atribuido = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL, null=True, blank=True,
@@ -87,32 +91,111 @@ class Ocorrencia(AuditModel):
         null=True, blank=True, editable=False, verbose_name="Última Edição do Histórico"
     )
 
+    # CAMPOS DE ASSINATURA DIGITAL
+    finalizada_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.PROTECT,
+        related_name='ocorrencias_finalizadas',
+        null=True, 
+        blank=True,
+        verbose_name="Finalizada por"
+    )
+    data_assinatura_finalizacao = models.DateTimeField(
+        null=True, 
+        blank=True,
+        verbose_name="Data/Hora da Assinatura"
+    )
+    ip_assinatura_finalizacao = models.GenericIPAddressField(
+        null=True, 
+        blank=True,
+        verbose_name="IP da Assinatura"
+    )
+    reaberta_por = models.ForeignKey(
+    settings.AUTH_USER_MODEL,
+    on_delete=models.PROTECT,
+    related_name='ocorrencias_reabertas',
+    null=True,
+    blank=True,
+    verbose_name="Reaberta por"
+    )
+    data_reabertura = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Data/Hora da Reabertura"
+    )
+    motivo_reabertura = models.TextField(
+        blank=True,
+        verbose_name="Motivo da Reabertura"
+    )
+    ip_reabertura = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+        verbose_name="IP da Reabertura"
+    )
+
+    # PROPRIEDADES PARA ASSINATURA
+    @property 
+    def esta_finalizada(self):
+        """Verifica se a ocorrência está finalizada com assinatura"""
+        return self.status == 'FINALIZADA' and self.finalizada_por is not None
+
+    @property
+    def pode_ser_editada(self):
+        """Verifica se pode ser editada (não finalizada)"""
+        return not self.esta_finalizada
+
+    def finalizar_com_assinatura(self, user, ip_address):
+        """Finaliza a ocorrência com assinatura digital"""
+        self.status = 'FINALIZADA'
+        self.data_finalizacao = timezone.now()
+        self.finalizada_por = user
+        self.data_assinatura_finalizacao = timezone.now()
+        self.ip_assinatura_finalizacao = ip_address
+        self.save()
+
+    def reabrir(self, user, motivo, ip_address):
+        """Reabre a ocorrência (apenas super admin)"""
+        self.status = 'EM_ANALISE'
+        self.data_finalizacao = None
+        self.reaberta_por = user
+        self.data_reabertura = timezone.now()
+        self.motivo_reabertura = motivo
+        self.ip_reabertura = ip_address
+        self.save()
+
+    # MÉTODO SAVE EXISTENTE
     def save(self, *args, **kwargs):
+        # Gera o número da ocorrência apenas na primeira vez que o objeto é criado
         if not self.pk:
             now = datetime.datetime.now()
             servico_sigla = self.servico_pericial.sigla
             timestamp = now.strftime('%Y%m%d%H%M%S')
             self.numero_ocorrencia = f"{timestamp}/{servico_sigla}"
 
-        if self.numero_documento_origem:
-            self.numero_documento_origem = self.numero_documento_origem.upper()
-
-        # NOVA LÓGICA DE CAIXA ALTA
-        if self.processo_sei_numero:
-            self.processo_sei_numero = self.processo_sei_numero.upper()
-
+        # Atualiza o cronômetro do histórico se o texto mudou (apenas em edições)
         if self.pk:
             try:
                 versao_antiga = Ocorrencia.objects.get(pk=self.pk)
                 if versao_antiga.historico != self.historico:
-                    self.historico_ultima_edicao = datetime.datetime.now()
+                    self.historico_ultima_edicao = timezone.now()
             except Ocorrencia.DoesNotExist:
                 pass
 
-            if self.perito_atribuido and self.status == self.Status.AGUARDANDO_PERITO:
+        # LÓGICA DE STATUS MELHORADA
+        # Só altera o status automaticamente se não estiver finalizada
+        if self.status != self.Status.FINALIZADA:
+            if self.perito_atribuido:
+                # Se um perito foi atribuído, muda para EM_ANALISE
                 self.status = self.Status.EM_ANALISE
-            elif not self.perito_atribuido and self.status != self.Status.FINALIZADA:
+            else:
+                # Se não há perito, volta para AGUARDANDO_PERITO
                 self.status = self.Status.AGUARDANDO_PERITO
+
+        # Padroniza campos para caixa alta
+        if self.numero_documento_origem:
+            self.numero_documento_origem = self.numero_documento_origem.upper()
+        if self.processo_sei_numero:
+            self.processo_sei_numero = self.processo_sei_numero.upper()
 
         super(Ocorrencia, self).save(*args, **kwargs)
 
