@@ -30,10 +30,34 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
     """
     Endpoint da API para gerenciar Ocorrências.
     """
-    queryset = Ocorrencia.all_objects.all()
+    queryset = Ocorrencia.all_objects.select_related(
+        # Relações 1-para-1 ou 1-para-muitos (ForeignKey)
+        'servico_pericial',
+        'unidade_demandante',
+        'autoridade__cargo', # Já busca o cargo da autoridade junto
+        'cidade',
+        'classificacao',
+        'procedimento_cadastrado__tipo_procedimento',
+        'tipo_documento_origem',
+        'perito_atribuido',
+        'created_by',
+        'updated_by',
+        'finalizada_por',
+        'reaberta_por',
+        # Nossas fichas (relações OneToOne são como ForeignKey)
+        'ficha_local_crime',
+        'ficha_acidente_transito',
+        'ficha_constatacao_substancia',
+        'ficha_documentoscopia',
+        'ficha_material_diverso'
+    ).prefetch_related(
+        # Relações Muitos-para-Muitos
+        'exames_solicitados'
+    ).all()
     permission_classes = [OcorrenciaPermission] # Permissão Padrão
     filterset_class = OcorrenciaFilter
     search_fields = ['numero_ocorrencia', 'perito_atribuido__nome_completo', 'autoridade__nome']
+    
     
     def get_permissions(self):
         """
@@ -108,16 +132,37 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get', 'post'])
     def finalizar(self, request, pk=None):
         ocorrencia = self.get_object()
+        
         if request.method == 'POST':
+            # --- NOVA REGRA DE BLOQUEIO ---
+            # Busca por Ordens de Serviço que não estão concluídas
+            ordens_pendentes = ocorrencia.ordens_servico.exclude(
+                status=OrdemServico.Status.CONCLUIDA
+            ).filter(deleted_at__isnull=True) # Garante que não estamos olhando OS na lixeira
+            
+            # Se encontrar alguma pendente, bloqueia a finalização
+            if ordens_pendentes.exists():
+                numeros_os = list(ordens_pendentes.values_list('numero_os', flat=True))
+                return Response(
+                    {"error": f"Não é possível finalizar a ocorrência. As Ordens de Serviço a seguir ainda estão pendentes: {numeros_os}. Por favor, conclua ou cancele estas OS primeiro."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # --- FIM DA NOVA REGRA ---
+
+            # Se passou pela checagem, continua com a lógica de finalização
             if ocorrencia.esta_finalizada:
                 return Response({'error': 'Esta ocorrência já foi finalizada.'}, status=status.HTTP_400_BAD_REQUEST)
+            
             serializer = self.get_serializer(data=request.data)
-            if serializer.is_valid():
-                ip_address = request.META.get('REMOTE_ADDR', '127.0.0.1')
-                ocorrencia.finalizar_com_assinatura(request.user, ip_address)
-                response_serializer = OcorrenciaDetailSerializer(ocorrencia, context={'request': request})
-                return Response({'message': 'Ocorrência finalizada com sucesso.', 'ocorrencia': response_serializer.data}, status=status.HTTP_200_OK)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            serializer.is_valid(raise_exception=True)
+            
+            ip_address = request.META.get('REMOTE_ADDR', '127.0.0.1')
+            ocorrencia.finalizar_com_assinatura(request.user, ip_address)
+            
+            response_serializer = OcorrenciaDetailSerializer(ocorrencia, context={'request': request})
+            return Response({'message': 'Ocorrência finalizada com sucesso.', 'ocorrencia': response_serializer.data}, status=status.HTTP_200_OK)
+        
+        # A lógica para o GET continua a mesma
         serializer = self.get_serializer(instance=ocorrencia)
         return Response(serializer.data)
 

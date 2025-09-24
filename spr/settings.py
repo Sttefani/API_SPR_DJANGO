@@ -53,6 +53,9 @@ INSTALLED_APPS = [
     'procedimentos_cadastrados',
     'ocorrencias',
     'tipos_documento',
+    'fichas', 
+    'movimentacoes',
+    'ordens_servico'
 
 ]
 

@@ -4,6 +4,7 @@ from rest_framework import serializers
 from django.utils import timezone
 import datetime
 
+from fichas.serializers import FichaAcidenteTransitoSerializer, FichaConstatacaoSubstanciaSerializer, FichaDocumentoscopiaSerializer, FichaLocalCrimeSerializer, FichaMaterialDiversoSerializer
 from usuarios.models import User
 
 # 1. IMPORTAÇÕES DE MODELOS
@@ -39,6 +40,7 @@ class OcorrenciaListSerializer(serializers.ModelSerializer):
             'esta_finalizada'
         ]
 
+
     def get_status_prazo(self, obj):
         if obj.data_finalizacao: return 'CONCLUIDO'
         dias_corridos = (timezone.now().date() - obj.created_at.date()).days
@@ -56,7 +58,7 @@ class OcorrenciaListSerializer(serializers.ModelSerializer):
 
 class OcorrenciaDetailSerializer(serializers.ModelSerializer):
     """
-    Serializer para visualização de DETALHES de uma ocorrência (somente leitura).
+    Serializer para a visualização de DETALHES de uma ocorrência.
     """
     # --- Campos aninhados para leitura ---
     servico_pericial = ServicoPericialSerializer(read_only=True)
@@ -73,32 +75,33 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
     finalizada_por = UserNestedSerializer(read_only=True)
     reaberta_por = UserNestedSerializer(read_only=True)
 
+    # --- CORREÇÃO: ADICIONA AS FICHAS PARA EXIBIÇÃO ---
+    ficha_local_crime = FichaLocalCrimeSerializer(read_only=True)
+    ficha_acidente_transito = FichaAcidenteTransitoSerializer(read_only=True)
+    ficha_constatacao_substancia = FichaConstatacaoSubstanciaSerializer(read_only=True)
+    ficha_documentoscopia = FichaDocumentoscopiaSerializer(read_only=True)
+    ficha_material_diverso = FichaMaterialDiversoSerializer(read_only=True)
+
     class Meta:
         model = Ocorrencia
+        # Adiciona os nomes das fichas à lista de fields
         fields = [
             'id', 'numero_ocorrencia', 'status',
-            # Objetos aninhados
             'servico_pericial', 'unidade_demandante', 'autoridade', 
             'cidade', 'classificacao', 'procedimento_cadastrado', 
             'tipo_documento_origem', 'perito_atribuido', 
             'exames_solicitados', 'created_by', 'updated_by', 
             'finalizada_por', 'reaberta_por',
-            # Dados da ocorrência  
             'data_fato', 'hora_fato', 'historico', 'historico_ultima_edicao',
             'numero_documento_origem', 'data_documento_origem', 'processo_sei_numero',
-            # Dados de auditoria
             'data_finalizacao', 'data_assinatura_finalizacao', 'ip_assinatura_finalizacao',
             'data_reabertura', 'motivo_reabertura', 'ip_reabertura',
-            'created_at', 'updated_at'
+            'created_at', 'updated_at',
+            # Nomes dos campos de ficha
+            'ficha_local_crime', 'ficha_acidente_transito',
+            'ficha_constatacao_substancia', 'ficha_documentoscopia',
+            'ficha_material_diverso'
         ]
-        read_only_fields = [
-            'numero_ocorrencia', 'status', 'historico_ultima_edicao', 
-            'data_finalizacao', 'created_at', 'updated_at', 'created_by', 
-            'updated_by', 'finalizada_por', 'data_assinatura_finalizacao', 
-            'ip_assinatura_finalizacao', 'reaberta_por', 'data_reabertura', 
-            'motivo_reabertura', 'ip_reabertura'
-        ]
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
@@ -291,62 +294,22 @@ class OcorrenciaDisplaySerializer(serializers.ModelSerializer):
 
 class OcorrenciaCreateSerializer(serializers.ModelSerializer):
     """Serializer APENAS para CRIAÇÃO de ocorrências."""
-    
     servico_pericial_id = serializers.PrimaryKeyRelatedField(
-        queryset=ServicoPericial.objects.all(), 
-        source='servico_pericial',
-        label="Serviço Pericial"
-    )
+        queryset=ServicoPericial.objects.all(), source='servico_pericial', label="Serviço Pericial")
     unidade_demandante_id = serializers.PrimaryKeyRelatedField(
-        queryset=UnidadeDemandante.objects.all(), 
-        source='unidade_demandante', 
-        label="Unidade Demandante"
-    )
-    autoridade_id = serializers.PrimaryKeyRelatedField(
-        queryset=Autoridade.objects.all(), 
-        source='autoridade', 
-        label="Autoridade"
-    )
+        queryset=UnidadeDemandante.objects.all(), source='unidade_demandante', label="Unidade Demandante")
+    autoridade_id = serializers.PrimaryKeyRelatedField(queryset=Autoridade.objects.all(), source='autoridade', label="Autoridade")
     cidade_id = serializers.PrimaryKeyRelatedField(
-        queryset=Cidade.objects.all(), 
-        source='cidade', 
-        label="Cidade"
-    )
+        queryset=Cidade.objects.all(), source='cidade', label="Cidade")
     classificacao_id = serializers.PrimaryKeyRelatedField(
-        queryset=ClassificacaoOcorrencia.objects.all(), 
-        source='classificacao', 
-        label="Classificação"
-    )
+        queryset=ClassificacaoOcorrencia.objects.all(), source='classificacao', label="Classificação")
     procedimento_cadastrado_id = serializers.PrimaryKeyRelatedField(
-        queryset=ProcedimentoCadastrado.objects.all(), 
-        source='procedimento_cadastrado', 
-        required=False, allow_null=True, 
-        label="Procedimento"
-    )
+        queryset=ProcedimentoCadastrado.objects.all(), source='procedimento_cadastrado', required=False, allow_null=True, label="Procedimento")
     tipo_documento_origem_id = serializers.PrimaryKeyRelatedField(
-        queryset=TipoDocumento.objects.all(), 
-        source='tipo_documento_origem', 
-        required=False, allow_null=True, 
-        label="Tipo de Documento"
-    )
+        queryset=TipoDocumento.objects.all(), source='tipo_documento_origem', required=False, allow_null=True, label="Tipo de Documento")
     perito_atribuido_id = serializers.PrimaryKeyRelatedField(
-        queryset=User.objects.filter(perfil='PERITO'), 
-        source='perito_atribuido', 
-        required=False, allow_null=True, 
-        label="Perito Atribuído"
-    )
+        queryset=User.objects.filter(perfil='PERITO'),source='perito_atribuido', required=False,allow_null=True,label="Perito Atribuído")
     
-    exames_ids = serializers.ListField(
-        child=serializers.IntegerField(),
-        required=False,
-        allow_empty=True,
-        write_only=True,
-        help_text="Lista de IDs dos exames selecionados"
-    )
-    
-    # Campo para mostrar exames na resposta
-    exames_solicitados = ExameNestedSerializer(many=True, read_only=True)
-
     class Meta:
         model = Ocorrencia
         fields = [
@@ -355,7 +318,6 @@ class OcorrenciaCreateSerializer(serializers.ModelSerializer):
             'servico_pericial_id', 'unidade_demandante_id', 'autoridade_id',
             'cidade_id', 'classificacao_id', 'procedimento_cadastrado_id',
             'tipo_documento_origem_id', 'perito_atribuido_id',
-            'exames_ids', 'exames_solicitados'  # RESPOSTA COM EXAMES
         ]
 
     def __init__(self, *args, **kwargs):
