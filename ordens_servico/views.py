@@ -140,3 +140,25 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(ordem_servico)
         return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    # --- ACTIONS PARA GERAR PDFs ---
+
+@action(detail=True, methods=['get'], url_path='pdf')
+def gerar_pdf(self, request, *args, **kwargs):
+    ordem_servico = self.get_object()
+    return gerar_pdf_ordem_servico(ordem_servico, request)
+
+@action(detail=True, methods=['get'], url_path='pdf-oficial')
+def gerar_pdf_oficial(self, request, *args, **kwargs):
+    ordem_servico = self.get_object()
+    return gerar_pdf_oficial_ordem_servico(ordem_servico, request)
+
+@action(detail=False, methods=['get'], url_path='listagem-pdf')
+def gerar_listagem_pdf(self, request, *args, **kwargs):
+    ocorrencia_id = self.kwargs.get('ocorrencia_pk')
+    try:
+        ocorrencia = Ocorrencia.objects.get(pk=ocorrencia_id)
+    except Ocorrencia.DoesNotExist:
+        return Response({"error": "Ocorrência não encontrada."}, status=status.HTTP_404_NOT_FOUND)
+    
+    return gerar_pdf_listagem_ordens_servico(ocorrencia, request)

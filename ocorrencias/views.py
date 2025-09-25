@@ -6,7 +6,6 @@ from django.utils import timezone
 from django.db.models import Q
 
 from .models import Ocorrencia
-
 from .serializers import (
     OcorrenciaCreateSerializer,
     OcorrenciaListSerializer, 
@@ -16,7 +15,6 @@ from .serializers import (
     FinalizarComAssinaturaSerializer,
     ReabrirOcorrenciaSerializer
 )
-
 from .permissions import (
     OcorrenciaPermission, 
     PodeEditarOcorrencia, 
@@ -25,7 +23,15 @@ from .permissions import (
     PeritoAtribuidoRequired
 )
 from .filters import OcorrenciaFilter
-from .pdf_generator import gerar_pdf_ocorrencia
+from .pdf_generator import (
+    gerar_pdf_ocorrencia,
+    gerar_pdf_ocorrencias_por_perito,
+    gerar_pdf_ocorrencias_por_ano,
+    gerar_pdf_ocorrencias_por_status,
+    gerar_pdf_ocorrencias_por_servico,
+    gerar_pdf_ocorrencias_por_cidade,
+    gerar_pdf_relatorio_geral
+)
 
 
 class OcorrenciaViewSet(viewsets.ModelViewSet):
@@ -122,16 +128,13 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         queryset = self.get_queryset().filter(deleted_at__isnull=False)
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
-     # -----------------------------------------------------------------------------
-    # NOVA AÇÃO PARA GERAR PDF
-    # -----------------------------------------------------------------------------
+        
     @action(detail=True, methods=['get'])
     def imprimir(self, request, pk=None):
         ocorrencia = self.get_object()
         pdf_response = gerar_pdf_ocorrencia(ocorrencia, request)
         return pdf_response
             
-
     @action(detail=True, methods=['post'])
     def restaurar(self, request, pk=None):
         instance = self.get_object()
@@ -146,6 +149,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         if request.method == 'POST':
             # --- NOVA REGRA DE BLOQUEIO ---
             # Busca por Ordens de Serviço que não estão concluídas
+            from ordens_servico.models import OrdemServico
             ordens_pendentes = ocorrencia.ordens_servico.exclude(
                 status=OrdemServico.Status.CONCLUIDA
             ).filter(deleted_at__isnull=True) # Garante que não estamos olhando OS na lixeira
@@ -233,7 +237,15 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Esta ocorrência não foi finalizada ainda.'}, status=status.HTTP_400_BAD_REQUEST)
         return Response({
             'numero_ocorrencia': ocorrencia.numero_ocorrencia,
-            'assinatura_digital': { 'finalizada_por': {'id': ocorrencia.finalizada_por.id, 'nome': ocorrencia.finalizada_por.nome_completo, 'perfil': ocorrencia.finalizada_por.perfil}, 'data_assinatura': ocorrencia.data_assinatura_finalizacao, 'ip_origem': ocorrencia.ip_assinatura_finalizacao },
+            'assinatura_digital': { 
+                'finalizada_por': {
+                    'id': ocorrencia.finalizada_por.id, 
+                    'nome': ocorrencia.finalizada_por.nome_completo, 
+                    'perfil': ocorrencia.finalizada_por.perfil
+                }, 
+                'data_assinatura': ocorrencia.data_assinatura_finalizacao, 
+                'ip_origem': ocorrencia.ip_assinatura_finalizacao 
+            },
         })
 
     # ===== ACTIONS DE EXAMES =====
@@ -414,3 +426,95 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             'exames_atuais': serializer.data,
             'total_exames': ocorrencia.exames_solicitados.count()
         })
+
+    # ===== RELATÓRIOS PDF =====
+    @action(detail=False, methods=['get'], url_path='relatorio-perito/(?P<perito_id>[^/.]+)')
+    def relatorio_por_perito(self, request, perito_id=None, *args, **kwargs):
+        """
+        Gera PDF com ocorrências de um perito específico.
+        GET /api/ocorrencias/relatorio-perito/123/
+        """
+        try:
+            perito_id = int(perito_id)
+        except ValueError:
+            return Response(
+                {"error": "ID do perito deve ser um número válido."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        return gerar_pdf_ocorrencias_por_perito(perito_id, request)
+
+    @action(detail=False, methods=['get'], url_path='relatorio-ano/(?P<ano>[^/.]+)')
+    def relatorio_por_ano(self, request, ano=None, *args, **kwargs):
+        """
+        Gera PDF com ocorrências de um ano específico.
+        GET /api/ocorrencias/relatorio-ano/2025/
+        """
+        try:
+            ano = int(ano)
+            if ano < 2000 or ano > 2050:
+                raise ValueError("Ano inválido")
+        except ValueError:
+            return Response(
+                {"error": "Ano deve ser um número válido entre 2000 e 2050."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        return gerar_pdf_ocorrencias_por_ano(ano, request)
+
+    @action(detail=False, methods=['get'], url_path='relatorio-status/(?P<status_param>[^/.]+)')
+    def relatorio_por_status(self, request, status_param=None, *args, **kwargs):
+        """
+        Gera PDF com ocorrências de um status específico.
+        GET /api/ocorrencias/relatorio-status/EM_ANDAMENTO/
+        GET /api/ocorrencias/relatorio-status/FINALIZADA/
+        """
+        # Verifica se o status é válido
+        status_validos = [choice[0] for choice in Ocorrencia.Status.choices]
+        if status_param not in status_validos:
+            return Response(
+                {"error": f"Status inválido. Opções: {', '.join(status_validos)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        return gerar_pdf_ocorrencias_por_status(status_param, request)
+
+    @action(detail=False, methods=['get'], url_path='relatorio-servico/(?P<servico_id>[^/.]+)')
+    def relatorio_por_servico(self, request, servico_id=None, *args, **kwargs):
+        """
+        Gera PDF com ocorrências de um serviço pericial específico.
+        GET /api/ocorrencias/relatorio-servico/123/
+        """
+        try:
+            servico_id = int(servico_id)
+        except ValueError:
+            return Response(
+                {"error": "ID do serviço deve ser um número válido."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        return gerar_pdf_ocorrencias_por_servico(servico_id, request)
+
+    @action(detail=False, methods=['get'], url_path='relatorio-cidade/(?P<cidade_id>[^/.]+)')
+    def relatorio_por_cidade(self, request, cidade_id=None, *args, **kwargs):
+        """
+        Gera PDF com ocorrências de uma cidade específica.
+        GET /api/ocorrencias/relatorio-cidade/123/
+        """
+        try:
+            cidade_id = int(cidade_id)
+        except ValueError:
+            return Response(
+                {"error": "ID da cidade deve ser um número válido."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        return gerar_pdf_ocorrencias_por_cidade(cidade_id, request)
+
+    @action(detail=False, methods=['get'], url_path='relatorio-geral')
+    def relatorio_geral(self, request, *args, **kwargs):
+        """
+        Gera PDF com todas as ocorrências (listagem geral).
+        GET /api/ocorrencias/relatorio-geral/
+        """
+        return gerar_pdf_relatorio_geral(request)

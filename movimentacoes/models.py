@@ -34,21 +34,6 @@ class Movimentacao(AuditModel):
         verbose_name="Endereço de IP do Registro"
     )
     
-    # O AuditModel já fornece os seguintes campos, que cumprem as regras:
-    #
-    # created_at: Data e hora de criação. É 'auto_now_add=True',
-    #             o que o torna IMUTÁVEL após a criação.
-    #
-    # updated_at: Data e hora da última edição (apenas para Super Admin).
-    #
-    # created_by: Usuário que criou a movimentação.
-    #
-    # updated_by: Usuário que editou a movimentação.
-    #
-    # deleted_at: Data e hora da deleção (lixeira).
-    #
-    # deleted_by: Usuário que deletou (lixeira).
-    
     def __str__(self):
         data_formatada = self.created_at.strftime('%d/%m/%Y %H:%M')
         return f"({data_formatada}) {self.assunto}"

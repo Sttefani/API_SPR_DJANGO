@@ -3,11 +3,14 @@
 from rest_framework import viewsets, mixins, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
+
 from .models import Movimentacao
 from .serializers import MovimentacaoSerializer, CriarMovimentacaoSerializer
 from .permissions import MovimentacaoPermission
 from .filters import MovimentacaoFilter
 from ocorrencias.models import Ocorrencia
+from .pdf_generator import gerar_pdf_movimentacao, gerar_pdf_historico_movimentacoes  
+
 
 class MovimentacaoViewSet(
     mixins.CreateModelMixin,
@@ -76,3 +79,25 @@ class MovimentacaoViewSet(
         instance.restore()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+    @action(detail=True, methods=['get'], url_path='pdf')
+    def gerar_pdf(self, request, *args, **kwargs):
+        """
+        Gera PDF de uma movimentação específica.
+        GET /api/ocorrencias/{ocorrencia_pk}/movimentacoes/{id}/pdf/
+        """
+        movimentacao = self.get_object()
+        return gerar_pdf_movimentacao(movimentacao, request)
+    
+    @action(detail=False, methods=['get'], url_path='historico-pdf')
+    def gerar_historico_pdf(self, request, *args, **kwargs):
+        """
+        Gera PDF com todas as movimentações da ocorrência.
+        GET /api/ocorrencias/{ocorrencia_pk}/movimentacoes/historico-pdf/
+        """
+        ocorrencia_id = self.kwargs.get('ocorrencia_pk')
+        try:
+            ocorrencia = Ocorrencia.objects.get(pk=ocorrencia_id)
+        except Ocorrencia.DoesNotExist:
+            return Response({"error": "Ocorrência não encontrada."}, status=status.HTTP_404_NOT_FOUND)
+        
+        return gerar_pdf_historico_movimentacoes(ocorrencia, request)
