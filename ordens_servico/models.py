@@ -50,6 +50,19 @@ class OrdemServico(AuditModel):
     )
     data_ciencia = models.DateTimeField(null=True, blank=True)
     ip_ciencia = models.GenericIPAddressField(null=True, blank=True)
+    
+    def tomar_ciencia(self, user, ip_address):
+        """
+        Registra a ciência do perito na OS.
+        """
+        # Garante que a ciência só seja registrada uma vez
+        if not self.ciente_por:
+            self.ciente_por = user
+            self.data_ciencia = timezone.now()
+            self.ip_ciencia = ip_address
+            # Muda o status para Aberta, pois a contagem do prazo começa agora
+            self.status = self.Status.ABERTA
+            self.save()
 
     def save(self, *args, **kwargs):
         # Gera o número da OS na primeira criação

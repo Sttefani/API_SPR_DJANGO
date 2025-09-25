@@ -1,5 +1,4 @@
 # fichas/models.py
-
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
@@ -45,6 +44,12 @@ class FichaAcidenteTransito(AuditModel):
     is_endereco_nao_localizado = models.BooleanField(default=False, verbose_name="Endereço Não Localizado?")
     is_veiculo_oficial = models.BooleanField(default=False, verbose_name="Veículo Oficial Envolvido?")
     orgao_veiculo_oficial = models.CharField(max_length=100, blank=True, verbose_name="Órgão Vinculado ao Veículo")
+    auxiliar = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='fichas_acidente_como_auxiliar',
+        verbose_name="Auxiliar Operacional",
+        limit_choices_to={'perfil': 'OPERACIONAL'}
+    )
     
     class Meta:
         verbose_name = "Ficha de Acidente de Trânsito"

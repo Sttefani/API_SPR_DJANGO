@@ -111,12 +111,12 @@ class Ocorrencia(AuditModel):
         verbose_name="IP da Assinatura"
     )
     reaberta_por = models.ForeignKey(
-    settings.AUTH_USER_MODEL,
-    on_delete=models.PROTECT,
-    related_name='ocorrencias_reabertas',
-    null=True,
-    blank=True,
-    verbose_name="Reaberta por"
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='ocorrencias_reabertas',
+        null=True,
+        blank=True,
+        verbose_name="Reaberta por"
     )
     data_reabertura = models.DateTimeField(
         null=True,

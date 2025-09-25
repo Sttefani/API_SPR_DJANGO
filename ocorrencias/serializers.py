@@ -40,7 +40,6 @@ class OcorrenciaListSerializer(serializers.ModelSerializer):
             'esta_finalizada'
         ]
 
-
     def get_status_prazo(self, obj):
         if obj.data_finalizacao: return 'CONCLUIDO'
         dias_corridos = (timezone.now().date() - obj.created_at.date()).days

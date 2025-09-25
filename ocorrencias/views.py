@@ -25,6 +25,8 @@ from .permissions import (
     PeritoAtribuidoRequired
 )
 from .filters import OcorrenciaFilter
+from .pdf_generator import gerar_pdf_ocorrencia
+
 
 class OcorrenciaViewSet(viewsets.ModelViewSet):
     """
@@ -57,7 +59,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
     permission_classes = [OcorrenciaPermission] # Permissão Padrão
     filterset_class = OcorrenciaFilter
     search_fields = ['numero_ocorrencia', 'perito_atribuido__nome_completo', 'autoridade__nome']
-    
     
     def get_permissions(self):
         """
@@ -121,6 +122,15 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         queryset = self.get_queryset().filter(deleted_at__isnull=False)
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+     # -----------------------------------------------------------------------------
+    # NOVA AÇÃO PARA GERAR PDF
+    # -----------------------------------------------------------------------------
+    @action(detail=True, methods=['get'])
+    def imprimir(self, request, pk=None):
+        ocorrencia = self.get_object()
+        pdf_response = gerar_pdf_ocorrencia(ocorrencia, request)
+        return pdf_response
+            
 
     @action(detail=True, methods=['post'])
     def restaurar(self, request, pk=None):
