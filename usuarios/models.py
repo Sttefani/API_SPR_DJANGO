@@ -29,7 +29,7 @@ class AuditModel(models.Model):
     class Meta:
         abstract = True # Garante que este modelo não crie uma tabela no banco, servindo apenas para herança.
 
-    def soft_delete(self, user): # Ele já recebe 'user', está correto. Apenas confirmando.
+    def soft_delete(self, user):
         from django.utils import timezone
         self.deleted_at = timezone.now()
         self.deleted_by = user
@@ -98,6 +98,8 @@ class User(AbstractUser, AuditModel):
     # Campos de controle do sistema
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDENTE)
     perfil = models.CharField(max_length=15, choices=Perfil.choices, blank=True, null=True)
+    # CAMPO ADICIONADO PARA A FUNCIONALIDADE DE RESET DE SENHA
+    deve_alterar_senha = models.BooleanField(default=False)
 
     # Campo de relação (atrelamento) com os Serviços Periciais
     servicos_periciais = models.ManyToManyField(

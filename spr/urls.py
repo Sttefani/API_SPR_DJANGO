@@ -3,12 +3,14 @@
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework_nested import routers
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+# REMOVIDO TokenObtainPairView DAQUI PARA EVITAR CONFLITO
+from rest_framework_simplejwt.views import TokenRefreshView
 
 # Importa TODAS as suas ViewSets
 from movimentacoes.views import MovimentacaoViewSet
 from ordens_servico.views import OrdemServicoViewSet
-from usuarios.views import UserRegistrationViewSet, UserManagementViewSet
+# ADICIONADO MyTokenObtainPairView PARA O LOGIN CUSTOMIZADO
+from usuarios.views import UserRegistrationViewSet, UserManagementViewSet, MyTokenObtainPairView
 from servicos_periciais.views import ServicoPericialViewSet
 from cidades.views import CidadeViewSet
 from cargos.views import CargoViewSet
@@ -98,7 +100,7 @@ vestigios_router.register(r'lacres', LacreViewSet, basename='vestigio-lacres')
 # =============================================================================
 urlpatterns = [
     path('admin/', admin.site.urls),
-    
+
     # Inclui todas as rotas de todos os roteadores
     path('api/', include(router.urls)),
     path('api/', include(ocorrencias_router.urls)),
@@ -107,10 +109,11 @@ urlpatterns = [
     path('api/', include(fichaconst_router.urls)),
     path('api/', include(fichadoc_router.urls)),
     path('api/', include(fichamatdiv_router.urls)),
-    path('api/', include(vestigios_router.urls)), # Adiciona o Nível 4
-    
+    path('api/', include(vestigios_router.urls)),
+
     # Autenticação
     path('api-auth/', include('rest_framework.urls')),
-    path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    # URL DE LOGIN MODIFICADA PARA USAR A VIEW CUSTOMIZADA
+    path('api/token/', MyTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
 ]
