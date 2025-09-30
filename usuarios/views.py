@@ -25,7 +25,7 @@ class UserRegistrationViewSet(mixins.CreateModelMixin,
     """
     queryset = User.objects.all()
     serializer_class = UserCreateSerializer
-
+    
 
 class UserManagementViewSet(mixins.ListModelMixin,
                             mixins.RetrieveModelMixin,
@@ -48,9 +48,6 @@ class UserManagementViewSet(mixins.ListModelMixin,
         """Executa o soft delete em vez da exclusão real do banco de dados."""
         instance.soft_delete(user=self.request.user)
 
-    # =============================================================================
-    # AÇÃO PARA RESETAR A SENHA DE UM USUÁRIO PARA SEU CPF
-    # =============================================================================
     @action(detail=True, methods=['post'], url_path='resetar-senha-cpf')
     def reset_password_to_cpf(self, request, pk=None):
         """
@@ -65,10 +62,7 @@ class UserManagementViewSet(mixins.ListModelMixin,
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Remove caracteres não numéricos do CPF para usar como senha
         cpf_como_senha = ''.join(filter(str.isdigit, user.cpf))
-
-        # Define a nova senha e a flag de alteração obrigatória
         user.set_password(cpf_como_senha)
         user.deve_alterar_senha = True
         user.updated_by = request.user
@@ -79,11 +73,76 @@ class UserManagementViewSet(mixins.ListModelMixin,
             status=status.HTTP_200_OK
         )
 
+    @action(detail=True, methods=['post'], url_path='aprovar')
+    def approve_user(self, request, pk=None):
+        """
+        Muda o status de um usuário de 'PENDENTE' para 'ATIVO'.
+        """
+        user = self.get_object()
+
+        if user.status != User.Status.PENDENTE:
+            return Response(
+                {'error': 'Este usuário não está pendente de aprovação.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user.status = User.Status.ATIVO
+        user.updated_by = request.user
+        user.save(update_fields=['status', 'updated_by', 'updated_at'])
+
+        return Response(
+            {'status': f'Usuário {user.nome_completo} aprovado com sucesso.'},
+            status=status.HTTP_200_OK
+        )
+
+    @action(detail=True, methods=['post'], url_path='reprovar')
+    def reject_user(self, request, pk=None):
+        """
+        Muda o status de um usuário de 'PENDENTE' para 'INATIVO'.
+        """
+        user = self.get_object()
+
+        if user.status != User.Status.PENDENTE:
+            return Response(
+                {'error': 'Este usuário não está pendente de aprovação.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user.status = User.Status.INATIVO
+        user.updated_by = request.user
+        user.save(update_fields=['status', 'updated_by', 'updated_at'])
+
+        return Response(
+            {'status': f'Cadastro do usuário {user.nome_completo} foi reprovado.'},
+            status=status.HTTP_200_OK
+        )
+        
+    @action(detail=True, methods=['post'], url_path='reativar')
+    def reactivate_user(self, request, pk=None):
+        """
+        Muda status de INATIVO para PENDENTE
+        """
+        user = self.get_object()
+        
+        if user.status != User.Status.INATIVO:
+            return Response(
+                {'error': 'Apenas usuários inativos podem ser reativados.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user.status = User.Status.PENDENTE
+        user.updated_by = request.user
+        user.save(update_fields=['status', 'updated_by', 'updated_at'])
+        
+        return Response(
+            {'status': f'Usuário {user.nome_completo} reativado para aprovação.'},
+            status=status.HTTP_200_OK
+        )
+
 
 class ChangePasswordView(APIView):
     """
     Endpoint para um usuário LOGADO alterar sua PRÓPRIA senha.
-    Usado na tela de troca de senha obrigatória.
     """
     permission_classes = [IsAuthenticated]
 
@@ -94,23 +153,26 @@ class ChangePasswordView(APIView):
             old_password = serializer.validated_data['old_password']
             new_password = serializer.validated_data['new_password']
 
-            # Verifica se a senha antiga (o CPF, por exemplo) está correta
             if not user.check_password(old_password):
-                return Response({"error": "A senha antiga está incorreta."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {"error": "A senha antiga está incorreta."}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-            # Define a nova senha e desmarca a flag de alteração obrigatória
             user.set_password(new_password)
             user.deve_alterar_senha = False
             user.save()
             
-            return Response({"status": "Senha alterada com sucesso."}, status=status.HTTP_200_OK)
+            return Response(
+                {"status": "Senha alterada com sucesso."}, 
+                status=status.HTTP_200_OK
+            )
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class MyTokenObtainPairView(TokenObtainPairView):
     """
-    Substitui a view de login padrão para incluir o campo 'deve_alterar_senha'
-    na resposta do token.
+    Substitui a view de login padrão para incluir campos customizados.
     """
     serializer_class = MyTokenObtainPairSerializer

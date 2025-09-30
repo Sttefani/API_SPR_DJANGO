@@ -10,7 +10,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from movimentacoes.views import MovimentacaoViewSet
 from ordens_servico.views import OrdemServicoViewSet
 # ADICIONADO MyTokenObtainPairView PARA O LOGIN CUSTOMIZADO
-from usuarios.views import UserRegistrationViewSet, UserManagementViewSet, MyTokenObtainPairView
+from usuarios.views import UserRegistrationViewSet, UserManagementViewSet, MyTokenObtainPairView, ChangePasswordView
 from servicos_periciais.views import ServicoPericialViewSet
 from cidades.views import CidadeViewSet
 from cargos.views import CargoViewSet
@@ -111,8 +111,8 @@ urlpatterns = [
     path('api/', include(fichamatdiv_router.urls)),
     path('api/', include(vestigios_router.urls)),
 
-    # Autenticação
     path('api-auth/', include('rest_framework.urls')),
+    path('api/change-password/', ChangePasswordView.as_view(), name='change-password'),  # ← ADICIONE ESTA LINHA
     # URL DE LOGIN MODIFICADA PARA USAR A VIEW CUSTOMIZADA
     path('api/token/', MyTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),

@@ -1,24 +1,25 @@
 # usuarios/serializers.py
 
+from django.contrib.auth import get_user_model
 from rest_framework import serializers
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.validators import UniqueValidator
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import User
 from servicos_periciais.models import ServicoPericial
 
+User = get_user_model()
+
+
 # -----------------------------------------------------------------------------
-# SERIALIZER ANINHADO SIMPLES PARA SERVIÇOS (PARA USO INTERNO)
+# NENHUMA ALTERAÇÃO NOS SERIALIZERS ABAIXO
 # -----------------------------------------------------------------------------
 class ServicoPericialNestedSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServicoPericial
         fields = ['id', 'sigla', 'nome']
 
-
-# -----------------------------------------------------------------------------
-# SERIALIZER PARA CRIAÇÃO DE NOVOS USUÁRIOS (CADASTRO)
-# -----------------------------------------------------------------------------
 class UserCreateSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(
         validators=[UniqueValidator(queryset=User.objects.all(), message="Este endereço de e-mail já está em uso.")]
@@ -38,19 +39,11 @@ class UserCreateSerializer(serializers.ModelSerializer):
         password = validated_data.pop('password')
         user = User(**validated_data)
         user.set_password(password)
-        # O status padrão 'PENDENTE' e deve_alterar_senha=False são definidos no modelo
         user.save()
         return user
 
-
-# -----------------------------------------------------------------------------
-# SERIALIZER PARA GERENCIAMENTO DE USUÁRIOS (TELA DO SUPER ADMIN)
-# -----------------------------------------------------------------------------
 class UserManagementSerializer(serializers.ModelSerializer):
-    # Para LEITURA: Mostra os detalhes dos serviços.
     servicos_periciais = ServicoPericialNestedSerializer(many=True, read_only=True)
-    
-    # Para ESCRITA: Espera uma lista de IDs de serviços.
     servicos_periciais_ids = serializers.PrimaryKeyRelatedField(
         queryset=ServicoPericial.objects.all(),
         source='servicos_periciais',
@@ -58,52 +51,85 @@ class UserManagementSerializer(serializers.ModelSerializer):
         write_only=True,
         label='Serviços Periciais'
     )
-
     class Meta:
         model = User
         fields = [
             'id', 'nome_completo', 'email', 'cpf',
             'telefone_celular', 'data_nascimento', 'status', 'perfil',
-            'deve_alterar_senha',  # CAMPO ADICIONADO PARA VISIBILIDADE DO ADMIN
+            'deve_alterar_senha',
             'servicos_periciais',
             'servicos_periciais_ids',
             'created_at', 'updated_at',
         ]
-        # Campos que o admin não pode alterar diretamente por esta tela
         read_only_fields = [
-            'id', 'nome_completo', 'email', 'cpf', 'telefone_celular',
+            'id', 'nome_completo', 'email', 'cpf',
             'data_nascimento', 'created_at', 'updated_at', 'deve_alterar_senha'
         ]
 
-
-# -----------------------------------------------------------------------------
-# SERIALIZER "LEVE" PARA ANINHAMENTO EM OUTROS MODELOS
-# -----------------------------------------------------------------------------
 class UserNestedSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'nome_completo', 'email']
 
+# =============================================================================
+# CORREÇÃO APLICADA AQUI
+# =============================================================================
+# usuarios/serializers.py
+
+# ... (todos os outros imports e serializers que não serão alterados) ...
 
 # =============================================================================
-# SERIALIZERS PARA A NOVA FUNCIONALIDADE DE RESET/CHANGE DE SENHA
+# CORREÇÃO FINAL APLICADA AQUI
 # =============================================================================
+# ... (imports e outros serializers continuam os mesmos) ...
 
-# 1. Para o login (Token), para informar o frontend sobre a necessidade de troca
+# =============================================================================
+# VERSÃO DE TESTE - LÓGICA MANUAL E DIRETA
+# =============================================================================
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
+
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
-
-        # Adiciona dados customizados ao payload do token
         token['nome_completo'] = user.nome_completo
         token['perfil'] = user.perfil
         token['deve_alterar_senha'] = user.deve_alterar_senha
-
+        token['is_superuser'] = user.is_superuser  # ← ADICIONE ESTA LINHA
         return token
 
+    def validate(self, attrs):
+        email = attrs.get(self.username_field)
+        password = attrs.get("password")
 
-# 2. Para o endpoint onde o próprio usuário vai alterar sua senha
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            raise AuthenticationFailed("E-mail ou senha incorretos.")
+
+        if user.status == User.Status.PENDENTE:
+            raise AuthenticationFailed("Seu cadastro ainda está pendente de aprovação.")
+        
+        if user.status == User.Status.INATIVO:
+            raise AuthenticationFailed("Sua conta está inativa. Entre em contato com o suporte.")
+
+        if not user.check_password(password):
+            raise AuthenticationFailed("E-mail ou senha incorretos.")
+
+        data = super().validate(attrs)
+        
+        data['user'] = {
+            'id': self.user.id,
+            'nome_completo': self.user.nome_completo,
+            'email': self.user.email,
+            'perfil': self.user.perfil,
+            'deve_alterar_senha': self.user.deve_alterar_senha,
+            'is_superuser': self.user.is_superuser  # ← ADICIONE ESTA LINHA
+        }
+        
+        return data
+# -----------------------------------------------------------------------------
+# NENHUMA ALTERAÇÃO AQUI
+# -----------------------------------------------------------------------------
 class ChangePasswordSerializer(serializers.Serializer):
     old_password = serializers.CharField(required=True, write_only=True)
     new_password = serializers.CharField(required=True, min_length=6, write_only=True)
