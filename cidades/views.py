@@ -1,4 +1,4 @@
-from rest_framework import viewsets, status, filters  # ← Adicione filters
+from rest_framework import viewsets, status, filters
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from .models import Cidade
@@ -6,20 +6,27 @@ from .serializers import CidadeSerializer, CidadeLixeiraSerializer
 from .permissions import CidadePermission
 
 class CidadeViewSet(viewsets.ModelViewSet):
-    """
-    Endpoint da API para gerenciar Cidades.
-    - Todos os usuários autenticados podem criar, listar e editar.
-    - Apenas Super Admin pode deletar (soft delete).
-    """
-    queryset = Cidade.objects.all().order_by('nome')  # ← Mudado para .objects (só ativos)
+    queryset = Cidade.objects.all().order_by('nome')
     permission_classes = [CidadePermission]
-    filter_backends = [filters.SearchFilter]  # ← TROQUE por isso
-    search_fields = ['nome']  # ← TROQUE por isso
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['nome']
+    
+    def get_queryset(self):
+        """Sobrescreve queryset para actions específicas"""
+        if self.action in ['restaurar', 'lixeira']:
+            return Cidade.all_objects.all()
+        return super().get_queryset()
 
     def get_serializer_class(self):
         if self.action == 'lixeira':
             return CidadeLixeiraSerializer
         return CidadeSerializer
+
+    @action(detail=False, methods=['get'])
+    def dropdown(self, request):
+        queryset = Cidade.objects.all().order_by('nome')
+        serializer = CidadeSerializer(queryset, many=True)
+        return Response(serializer.data)
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
@@ -29,7 +36,7 @@ class CidadeViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        instance.soft_delete(user=request.user)
+        instance.soft_delete(user=self.request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False, methods=['get'])

@@ -117,6 +117,13 @@ class UserManagementViewSet(mixins.ListModelMixin,
             status=status.HTTP_200_OK
         )
         
+    @action(detail=False, methods=['get'])
+    def dropdown(self, request):
+        """Retorna TODOS os usuários ATIVOS para uso em dropdowns (sem paginação)"""
+        queryset = User.objects.filter(status='ATIVO').order_by('nome_completo')
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+        
     @action(detail=True, methods=['post'], url_path='reativar')
     def reactivate_user(self, request, pk=None):
         """

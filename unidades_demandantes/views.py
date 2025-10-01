@@ -1,6 +1,4 @@
-# unidades_demandantes/views.py
-
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, filters
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from .models import UnidadeDemandante
@@ -8,19 +6,27 @@ from .serializers import UnidadeDemandanteSerializer, UnidadeDemandanteLixeiraSe
 from .permissions import UnidadeDemandantePermission
 
 class UnidadeDemandanteViewSet(viewsets.ModelViewSet):
-    queryset = UnidadeDemandante.all_objects.all()
+    queryset = UnidadeDemandante.objects.all().order_by('sigla')
     permission_classes = [UnidadeDemandantePermission]
-    filterset_fields = ['sigla', 'nome']
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['sigla', 'nome']
+    
+    def get_queryset(self):
+        """Sobrescreve queryset para actions específicas"""
+        if self.action in ['restaurar', 'lixeira']:
+            return UnidadeDemandante.all_objects.all()
+        return super().get_queryset()
 
     def get_serializer_class(self):
         if self.action == 'lixeira':
             return UnidadeDemandanteLixeiraSerializer
         return UnidadeDemandanteSerializer
 
-    def list(self, request, *args, **kwargs):
-        queryset = UnidadeDemandante.objects.all()
-        queryset = self.filter_queryset(queryset)
-        serializer = self.get_serializer(queryset, many=True)
+    @action(detail=False, methods=['get'])
+    def dropdown(self, request):
+        """Retorna TODAS as unidades para uso em dropdowns (sem paginação)"""
+        queryset = UnidadeDemandante.objects.all().order_by('sigla')
+        serializer = UnidadeDemandanteSerializer(queryset, many=True)
         return Response(serializer.data)
 
     def perform_create(self, serializer):
@@ -36,13 +42,15 @@ class UnidadeDemandanteViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def lixeira(self, request):
-        lixeira_qs = UnidadeDemandante.all_objects.filter(deleted_at__isnull=False)
+        lixeira_qs = UnidadeDemandante.all_objects.filter(deleted_at__isnull=False).order_by('-deleted_at')
         serializer = self.get_serializer(lixeira_qs, many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'])
     def restaurar(self, request, pk=None):
         instance = self.get_object()
+        if instance.deleted_at is None:
+            return Response({'detail': 'Esta unidade não está deletada.'}, status=status.HTTP_400_BAD_REQUEST)
         instance.restore()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)

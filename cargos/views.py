@@ -1,5 +1,3 @@
-# cargos/views.py
-
 from rest_framework import viewsets, status, filters
 from rest_framework.response import Response
 from rest_framework.decorators import action
@@ -8,20 +6,27 @@ from .serializers import CargoSerializer, CargoLixeiraSerializer
 from .permissions import CargoPermission
 
 class CargoViewSet(viewsets.ModelViewSet):
-    """
-    Endpoint da API para gerenciar Cargos.
-    - Todos os usuários autenticados podem criar, listar e editar.
-    - Apenas Super Admin pode deletar (soft delete).
-    """
     queryset = Cargo.objects.all().order_by('nome')
     permission_classes = [CargoPermission]
     filter_backends = [filters.SearchFilter]
     search_fields = ['nome']
+    
+    def get_queryset(self):
+        """Sobrescreve queryset para actions específicas"""
+        if self.action in ['restaurar', 'lixeira']:
+            return Cargo.all_objects.all()
+        return super().get_queryset()
 
     def get_serializer_class(self):
         if self.action == 'lixeira':
             return CargoLixeiraSerializer
         return CargoSerializer
+
+    @action(detail=False, methods=['get'])
+    def dropdown(self, request):
+        queryset = Cargo.objects.all().order_by('nome')
+        serializer = CargoSerializer(queryset, many=True)
+        return Response(serializer.data)
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
