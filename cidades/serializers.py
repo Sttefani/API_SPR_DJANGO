@@ -21,13 +21,13 @@ class CidadeSerializer(serializers.ModelSerializer):
             )
         ]
     )
+    created_by = UserNestedSerializer(read_only=True)  # ← ADICIONE
+    updated_by = UserNestedSerializer(read_only=True)  # ← ADICIONE
 
     class Meta:
         model = Cidade
-        # O campo 'url' foi removido
-        fields = ['id', 'nome', 'created_at', 'updated_at']
-        read_only_fields = ['created_at', 'updated_at']
-
+        fields = ['id', 'nome', 'created_at', 'updated_at', 'created_by', 'updated_by']  # ← ADICIONE os campos
+        read_only_fields = ['created_at', 'updated_at', 'created_by', 'updated_by']
 # -----------------------------------------------------------------------------
 # SERIALIZER DA LIXEIRA (COM 'deleted_by' CORRIGIDO)
 # -----------------------------------------------------------------------------

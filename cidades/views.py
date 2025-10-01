@@ -1,11 +1,9 @@
-# cidades/views.py
-
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, filters  # ← Adicione filters
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from .models import Cidade
 from .serializers import CidadeSerializer, CidadeLixeiraSerializer
-from .permissions import CidadePermission # Importando nossa nova permissão
+from .permissions import CidadePermission
 
 class CidadeViewSet(viewsets.ModelViewSet):
     """
@@ -13,28 +11,20 @@ class CidadeViewSet(viewsets.ModelViewSet):
     - Todos os usuários autenticados podem criar, listar e editar.
     - Apenas Super Admin pode deletar (soft delete).
     """
-    queryset = Cidade.all_objects.all() # O queryset base vê todos os objetos
-    permission_classes = [CidadePermission] # Aplicando nossa regra de permissão customizada
-    filterset_fields = ['nome']
+    queryset = Cidade.objects.all().order_by('nome')  # ← Mudado para .objects (só ativos)
+    permission_classes = [CidadePermission]
+    filter_backends = [filters.SearchFilter]  # ← TROQUE por isso
+    search_fields = ['nome']  # ← TROQUE por isso
 
     def get_serializer_class(self):
-        # Usa o serializer correto dependendo da ação (lixeira ou normal)
         if self.action == 'lixeira':
             return CidadeLixeiraSerializer
         return CidadeSerializer
 
-    def list(self, request, *args, **kwargs):
-        # A lista principal mostra apenas as cidades não deletadas
-        queryset = Cidade.objects.all()
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
-
     def perform_create(self, serializer):
-        # CORREÇÃO AQUI
         serializer.save(created_by=self.request.user)
 
     def perform_update(self, serializer):
-        # E CORREÇÃO AQUI
         serializer.save(updated_by=self.request.user)
 
     def destroy(self, request, *args, **kwargs):
