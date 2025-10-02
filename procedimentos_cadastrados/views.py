@@ -1,6 +1,7 @@
-from rest_framework import viewsets, status, filters
+from rest_framework import viewsets, status, filters, serializers
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from django.db import IntegrityError
 from .models import ProcedimentoCadastrado
 from .serializers import ProcedimentoCadastradoSerializer, ProcedimentoCadastradoLixeiraSerializer
 from .permissions import ProcedimentoCadastradoPermission
@@ -12,7 +13,6 @@ class ProcedimentoCadastradoViewSet(viewsets.ModelViewSet):
     search_fields = ['numero', 'ano', 'tipo_procedimento__sigla', 'tipo_procedimento__nome']
     
     def get_queryset(self):
-        """Sobrescreve queryset para actions específicas"""
         if self.action in ['restaurar', 'lixeira']:
             return ProcedimentoCadastrado.all_objects.select_related('tipo_procedimento').all()
         return super().get_queryset()
@@ -23,10 +23,26 @@ class ProcedimentoCadastradoViewSet(viewsets.ModelViewSet):
         return ProcedimentoCadastradoSerializer
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        try:
+            serializer.save(created_by=self.request.user)
+        except IntegrityError:
+            tipo = serializer.validated_data.get('tipo_procedimento')
+            numero = serializer.validated_data.get('numero', '').upper()
+            ano = serializer.validated_data.get('ano')
+            raise serializers.ValidationError({
+                'numero': f'Já existe um procedimento {tipo.sigla} nº {numero}/{ano} cadastrado no sistema.'
+            })
 
     def perform_update(self, serializer):
-        serializer.save(updated_by=self.request.user)
+        try:
+            serializer.save(updated_by=self.request.user)
+        except IntegrityError:
+            tipo = serializer.validated_data.get('tipo_procedimento')
+            numero = serializer.validated_data.get('numero', '').upper()
+            ano = serializer.validated_data.get('ano')
+            raise serializers.ValidationError({
+                'numero': f'Já existe um procedimento {tipo.sigla} nº {numero}/{ano} cadastrado no sistema.'
+            })
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()

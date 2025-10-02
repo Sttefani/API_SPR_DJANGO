@@ -1,18 +1,20 @@
 from rest_framework import viewsets, status, filters
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from django_filters.rest_framework import DjangoFilterBackend
 from .models import Autoridade
 from .serializers import AutoridadeSerializer, AutoridadeLixeiraSerializer
 from .permissions import AutoridadePermission
 
 class AutoridadeViewSet(viewsets.ModelViewSet):
-    queryset = Autoridade.objects.select_related('cargo').all().order_by('nome')  # ← Mantenha isso
+    queryset = Autoridade.objects.select_related('cargo').all().order_by('nome')
+    serializer_class = AutoridadeSerializer
     permission_classes = [AutoridadePermission]
-    filter_backends = [filters.SearchFilter]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filterset_fields = ['cargo']
     search_fields = ['nome', 'cargo__nome']
-
+    
     def get_queryset(self):
-        """Sobrescreve queryset para actions específicas"""
         if self.action in ['restaurar', 'lixeira']:
             return Autoridade.all_objects.select_related('cargo').all()
         return super().get_queryset()
@@ -21,12 +23,6 @@ class AutoridadeViewSet(viewsets.ModelViewSet):
         if self.action == 'lixeira':
             return AutoridadeLixeiraSerializer
         return AutoridadeSerializer
-
-    @action(detail=False, methods=['get'])
-    def dropdown(self, request):
-        queryset = Autoridade.objects.select_related('cargo').all().order_by('nome')
-        serializer = AutoridadeSerializer(queryset, many=True)
-        return Response(serializer.data)
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
