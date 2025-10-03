@@ -1,21 +1,35 @@
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
+
+from servicos_periciais.permissions import ServicoPericialPermission
 from .models import ServicoPericial
 from .serializers import ServicoPericialSerializer, ServicoPericialLixeiraSerializer
+from rest_framework.permissions import SAFE_METHODS
 from usuarios.permissions import IsSuperAdminUser
+from rest_framework import viewsets, filters  # ← Certifique-se que filters está aqui
 
 
 class ServicoPericialViewSet(viewsets.ModelViewSet):
     """
     Endpoint da API para o Super Admin gerenciar os Serviços Periciais.
     """
-    queryset = ServicoPericial.objects.all().order_by('sigla')  # ← Mudei para .objects (só ativos)
+    queryset = ServicoPericial.objects.all().order_by('sigla')
     serializer_class = ServicoPericialSerializer
-    permission_classes = [IsSuperAdminUser]
+    permission_classes = [ServicoPericialPermission]  # ← MUDE AQUI
+    filter_backends = [filters.SearchFilter]  # ← ADICIONE
     filterset_fields = ['sigla', 'nome']
+    search_fields = ['sigla', 'nome']  # ← ADICIONE
+    pagination_class = None  # ← ADICIONE (esta é a linha crítica)
     
     # ← REMOVI o método list() customizado para usar paginação padrão
+    def has_permission(self, request, view):
+        # Se o método for de leitura (GET, HEAD, OPTIONS), permite o acesso.
+        if request.method in SAFE_METHODS:
+            return True
+
+        # Para todos os outros métodos (escrita), verifica se o utilizador é super admin.
+        return IsSuperAdminUser().has_permission(request, view)
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)

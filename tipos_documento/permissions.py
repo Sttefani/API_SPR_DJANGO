@@ -3,6 +3,7 @@
 from rest_framework.permissions import BasePermission, IsAuthenticated
 from usuarios.permissions import IsSuperAdminUser
 
+
 class TipoDocumentoPermission(BasePermission):
     def has_permission(self, request, view):
         if request.method == 'DELETE':

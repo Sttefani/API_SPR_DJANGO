@@ -13,11 +13,13 @@ class TipoDocumentoSerializer(serializers.ModelSerializer):
         max_length=100,
         validators=[UniqueValidator(queryset=TipoDocumento.objects.all(), message="Já existe um tipo de documento com este nome.")]
     )
+    created_by = UserNestedSerializer(read_only=True)  # ← DEVE TER
+    updated_by = UserNestedSerializer(read_only=True)  # ← DEVE TER
+    
     class Meta:
         model = TipoDocumento
-        # O campo 'url' foi removido
-        fields = ['id', 'nome', 'created_at', 'updated_at']
-        read_only_fields = ['created_at', 'updated_at']
+        fields = ['id', 'nome', 'created_at', 'updated_at', 'created_by', 'updated_by']  # ← TODOS
+        read_only_fields = ['created_at', 'updated_at', 'created_by', 'updated_by']
 
 # -----------------------------------------------------------------------------
 # SERIALIZER DA LIXEIRA (AGORA USANDO ModelSerializer)

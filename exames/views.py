@@ -1,28 +1,32 @@
-# exames/views.py
-
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, filters
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from django_filters.rest_framework import DjangoFilterBackend
 from .models import Exame
 from .serializers import ExameSerializer, ExameLixeiraSerializer
 from .permissions import ExamePermission
 
+
 class ExameViewSet(viewsets.ModelViewSet):
-    queryset = Exame.all_objects.select_related('parent', 'servico_pericial').all()
+    queryset = Exame.objects.select_related('parent', 'servico_pericial').all()
+    serializer_class = ExameSerializer
     permission_classes = [ExamePermission]
-    # Filtros para o frontend poder buscar exames por serviço, por pai, etc.
-    filterset_fields = ['codigo', 'nome', 'servico_pericial', 'parent']
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filterset_fields = ['servico_pericial', 'parent']
+    search_fields = ['codigo', 'nome']
+    pagination_class = None  # ← ADICIONE ESTA LINHA
+    
+    def get_queryset(self):
+        if self.action in ['restaurar', 'lixeira']:
+            return Exame.all_objects.select_related('parent', 'servico_pericial').all()
+        return super().get_queryset()
 
     def get_serializer_class(self):
         if self.action == 'lixeira':
             return ExameLixeiraSerializer
         return ExameSerializer
 
-    def list(self, request, *args, **kwargs):
-        queryset = Exame.objects.select_related('parent', 'servico_pericial').all()
-        queryset = self.filter_queryset(queryset)
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
+    # ← REMOVA TODO O MÉTODO list() DAQUI
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
@@ -37,13 +41,15 @@ class ExameViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def lixeira(self, request):
-        lixeira_qs = Exame.all_objects.filter(deleted_at__isnull=False)
+        lixeira_qs = Exame.all_objects.select_related('parent', 'servico_pericial').filter(deleted_at__isnull=False).order_by('-deleted_at')
         serializer = self.get_serializer(lixeira_qs, many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'])
     def restaurar(self, request, pk=None):
         instance = self.get_object()
+        if instance.deleted_at is None:
+            return Response({'detail': 'Este exame não está deletado.'}, status=status.HTTP_400_BAD_REQUEST)
         instance.restore()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)

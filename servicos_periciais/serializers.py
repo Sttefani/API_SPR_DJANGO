@@ -23,6 +23,7 @@ class ServicoPericialSerializer(serializers.ModelSerializer):
         fields = ['id', 'sigla', 'nome', 'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at']
 
+
 # -----------------------------------------------------------------------------
 # SERIALIZER DA LIXEIRA (COM 'deleted_by' ADICIONADO)
 # -----------------------------------------------------------------------------
