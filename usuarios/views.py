@@ -117,6 +117,23 @@ class UserManagementViewSet(mixins.ListModelMixin,
             status=status.HTTP_200_OK
         )
         
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def peritos_dropdown(self, request):
+        """Lista simplificada de peritos para dropdowns"""
+        peritos = User.objects.filter(
+            perfil='PERITO', 
+            deleted_at__isnull=True
+        ).order_by('nome_completo')
+        
+        data = [
+            {
+                'id': perito.id,
+                'nome_completo': perito.nome_completo
+            }
+            for perito in peritos
+        ]
+        return Response(data)
+                
     @action(detail=False, methods=['get'])
     def dropdown(self, request):
         """Retorna TODOS os usuários ATIVOS para uso em dropdowns (sem paginação)"""
