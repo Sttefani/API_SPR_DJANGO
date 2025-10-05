@@ -38,7 +38,11 @@ class Ocorrencia(AuditModel):
         Autoridade, on_delete=models.PROTECT, related_name="ocorrencias",
         verbose_name="Autoridade Demandante"
     )
-    data_fato = models.DateField(verbose_name="Data do Fato")
+    data_fato = models.DateField(
+    verbose_name="Data do Fato",
+    null=True,    # ← permite NULL no banco
+    blank=True    # ← permite vazio no formulário
+)
     hora_fato = models.TimeField(null=True, blank=True, verbose_name="Hora do Fato")
     cidade = models.ForeignKey(Cidade, on_delete=models.PROTECT, related_name="ocorrencias",
                                verbose_name="Cidade do Fato")

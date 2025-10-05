@@ -53,3 +53,9 @@ class CidadeViewSet(viewsets.ModelViewSet):
         instance.restore()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], pagination_class=None)
+    def dropdown(self, request):
+        queryset = self.get_queryset().order_by('nome')  
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)

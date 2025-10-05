@@ -87,45 +87,64 @@ class UserNestedSerializer(serializers.ModelSerializer):
 # VERSÃO DE TESTE - LÓGICA MANUAL E DIRETA
 # =============================================================================
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
-
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
         token['nome_completo'] = user.nome_completo
         token['perfil'] = user.perfil
         token['deve_alterar_senha'] = user.deve_alterar_senha
-        token['is_superuser'] = user.is_superuser  # ← ADICIONE ESTA LINHA
+        token['is_superuser'] = user.is_superuser
+        
+        # ← ADICIONAR: Serializar os serviços periciais
+        token['servicos_periciais'] = [
+            {
+                'id': s.id,
+                'sigla': s.sigla,
+                'nome': s.nome
+            }
+            for s in user.servicos_periciais.all()
+        ]
+        
         return token
-
+    
     def validate(self, attrs):
         email = attrs.get(self.username_field)
         password = attrs.get("password")
-
+        
         try:
             user = User.objects.get(email=email)
         except User.DoesNotExist:
             raise AuthenticationFailed("E-mail ou senha incorretos.")
-
+        
         if user.status == User.Status.PENDENTE:
             raise AuthenticationFailed("Seu cadastro ainda está pendente de aprovação.")
-        
+       
         if user.status == User.Status.INATIVO:
             raise AuthenticationFailed("Sua conta está inativa. Entre em contato com o suporte.")
-
+        
         if not user.check_password(password):
             raise AuthenticationFailed("E-mail ou senha incorretos.")
-
-        data = super().validate(attrs)
         
+        data = super().validate(attrs)
+       
+        # ← ADICIONAR: Incluir servicos_periciais na resposta também
         data['user'] = {
             'id': self.user.id,
             'nome_completo': self.user.nome_completo,
             'email': self.user.email,
             'perfil': self.user.perfil,
             'deve_alterar_senha': self.user.deve_alterar_senha,
-            'is_superuser': self.user.is_superuser  # ← ADICIONE ESTA LINHA
+            'is_superuser': self.user.is_superuser,
+            'servicos_periciais': [
+                {
+                    'id': s.id,
+                    'sigla': s.sigla,
+                    'nome': s.nome
+                }
+                for s in self.user.servicos_periciais.all()
+            ]
         }
-        
+       
         return data
 # -----------------------------------------------------------------------------
 # NENHUMA ALTERAÇÃO AQUI

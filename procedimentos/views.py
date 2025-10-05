@@ -54,3 +54,4 @@ class ProcedimentoViewSet(viewsets.ModelViewSet):
         instance.restore()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+    

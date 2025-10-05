@@ -63,3 +63,47 @@ class ProcedimentoCadastradoViewSet(viewsets.ModelViewSet):
         instance.restore()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def verificar_existente(self, request):
+        tipo_procedimento_id = request.GET.get('tipo_procedimento_id')
+        numero = request.GET.get('numero', '').upper()
+        ano = request.GET.get('ano')
+        
+        if not all([tipo_procedimento_id, numero, ano]):
+            return Response({'exists': False})
+        
+        procedimento = ProcedimentoCadastrado.objects.filter(
+            tipo_procedimento_id=tipo_procedimento_id,
+            numero=numero,
+            ano=ano
+        ).first()
+        
+        if procedimento:
+            serializer = self.get_serializer(procedimento)
+            return Response({
+                'exists': True,
+                'procedimento': serializer.data
+            })
+        
+        return Response({'exists': False})
+    
+    @action(detail=True, methods=['get'])
+    def ocorrencias_vinculadas(self, request, pk=None):
+        """Retorna todas as ocorrências vinculadas a este procedimento"""
+        procedimento = self.get_object()
+        ocorrencias = procedimento.ocorrencias.all().order_by('-created_at')
+        
+        from ocorrencias.serializers import OcorrenciaListSerializer
+        serializer = OcorrenciaListSerializer(ocorrencias, many=True)
+        
+        return Response({
+            'procedimento': {
+                'id': procedimento.id,
+                'tipo': procedimento.tipo_procedimento.sigla,
+                'numero': procedimento.numero,
+                'ano': procedimento.ano
+            },
+            'total_ocorrencias': ocorrencias.count(),
+            'ocorrencias': serializer.data
+        })

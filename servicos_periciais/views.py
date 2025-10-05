@@ -22,6 +22,8 @@ class ServicoPericialViewSet(viewsets.ModelViewSet):
     search_fields = ['sigla', 'nome']  # ← ADICIONE
     pagination_class = None  # ← ADICIONE (esta é a linha crítica)
     
+    
+    
     # ← REMOVI o método list() customizado para usar paginação padrão
     def has_permission(self, request, view):
         # Se o método for de leitura (GET, HEAD, OPTIONS), permite o acesso.
@@ -63,4 +65,10 @@ class ServicoPericialViewSet(viewsets.ModelViewSet):
 
         instance.restore()
         serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], pagination_class=None)
+    def dropdown(self, request):
+        queryset = self.get_queryset().order_by('nome')  # ou outro campo apropriado
+        serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)

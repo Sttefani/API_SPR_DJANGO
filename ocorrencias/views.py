@@ -4,6 +4,10 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
 from django.db.models import Q
+from django.utils import timezone
+from datetime import timedelta
+from django.db.models import Count
+from servicos_periciais.models import ServicoPericial
 
 from .models import Ocorrencia
 from .serializers import (
@@ -35,14 +39,10 @@ from .pdf_generator import (
 
 
 class OcorrenciaViewSet(viewsets.ModelViewSet):
-    """
-    Endpoint da API para gerenciar Ocorrências.
-    """
     queryset = Ocorrencia.all_objects.select_related(
-        # Relações 1-para-1 ou 1-para-muitos (ForeignKey)
         'servico_pericial',
         'unidade_demandante',
-        'autoridade__cargo', # Já busca o cargo da autoridade junto
+        'autoridade__cargo',
         'cidade',
         'classificacao',
         'procedimento_cadastrado__tipo_procedimento',
@@ -52,24 +52,19 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         'updated_by',
         'finalizada_por',
         'reaberta_por',
-        # Nossas fichas (relações OneToOne são como ForeignKey)
         'ficha_local_crime',
         'ficha_acidente_transito',
         'ficha_constatacao_substancia',
         'ficha_documentoscopia',
         'ficha_material_diverso'
     ).prefetch_related(
-        # Relações Muitos-para-Muitos
         'exames_solicitados'
     ).all()
-    permission_classes = [OcorrenciaPermission] # Permissão Padrão
+    permission_classes = [OcorrenciaPermission]
     filterset_class = OcorrenciaFilter
     search_fields = ['numero_ocorrencia', 'perito_atribuido__nome_completo', 'autoridade__nome']
     
     def get_permissions(self):
-        """
-        Define as permissões corretas para cada ação.
-        """
         if self.action in ['adicionar_exames', 'remover_exames']:
             return [PeritoAtribuidoRequired()]
         if self.action == 'finalizar':
@@ -78,7 +73,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             return [PodeReabrirOcorrencia()]
         if self.action in ['update', 'partial_update']:
             return [PodeEditarOcorrencia()]
-        
         return [permission() for permission in self.permission_classes]
     
     def get_serializer_class(self):
@@ -94,8 +88,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             return OcorrenciaUpdateSerializer
         if self.action == 'create':
             return OcorrenciaCreateSerializer
-        
-        # Para retrieve (visualização)
         return OcorrenciaDetailSerializer
 
     def get_queryset(self):
@@ -104,7 +96,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         
         if user.is_superuser or user.perfil == 'ADMINISTRATIVO':
             if self.action != 'lixeira':
-                 queryset = queryset.filter(deleted_at__isnull=True)
+                queryset = queryset.filter(deleted_at__isnull=True)
             return queryset
         
         return queryset.filter(
@@ -147,23 +139,18 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         ocorrencia = self.get_object()
         
         if request.method == 'POST':
-            # --- NOVA REGRA DE BLOQUEIO ---
-            # Busca por Ordens de Serviço que não estão concluídas
             from ordens_servico.models import OrdemServico
             ordens_pendentes = ocorrencia.ordens_servico.exclude(
                 status=OrdemServico.Status.CONCLUIDA
-            ).filter(deleted_at__isnull=True) # Garante que não estamos olhando OS na lixeira
+            ).filter(deleted_at__isnull=True)
             
-            # Se encontrar alguma pendente, bloqueia a finalização
             if ordens_pendentes.exists():
                 numeros_os = list(ordens_pendentes.values_list('numero_os', flat=True))
                 return Response(
                     {"error": f"Não é possível finalizar a ocorrência. As Ordens de Serviço a seguir ainda estão pendentes: {numeros_os}. Por favor, conclua ou cancele estas OS primeiro."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            # --- FIM DA NOVA REGRA ---
 
-            # Se passou pela checagem, continua com a lógica de finalização
             if ocorrencia.esta_finalizada:
                 return Response({'error': 'Esta ocorrência já foi finalizada.'}, status=status.HTTP_400_BAD_REQUEST)
             
@@ -176,7 +163,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             response_serializer = OcorrenciaDetailSerializer(ocorrencia, context={'request': request})
             return Response({'message': 'Ocorrência finalizada com sucesso.', 'ocorrencia': response_serializer.data}, status=status.HTTP_200_OK)
         
-        # A lógica para o GET continua a mesma
         serializer = self.get_serializer(instance=ocorrencia)
         return Response(serializer.data)
 
@@ -248,7 +234,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             },
         })
 
-    # ===== ACTIONS DE EXAMES =====
     @action(detail=True, methods=['post'])
     def adicionar_exames(self, request, pk=None):
         ocorrencia = self.get_object()
@@ -271,7 +256,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         if not isinstance(exames_ids, list):
             return Response({"error": "O campo 'exames_ids' deve ser uma lista de IDs."}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Validação de IDs existentes
         if exames_ids:
             from exames.models import Exame
             existing_ids = list(Exame.objects.filter(id__in=exames_ids).values_list('id', flat=True))
@@ -308,7 +292,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         if not isinstance(exames_ids, list):
             return Response({"error": "O campo 'exames_ids' deve ser uma lista de IDs."}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Validação: IDs vinculados à ocorrência
         if exames_ids:
             exames_atuais = list(ocorrencia.exames_solicitados.values_list('id', flat=True))
             ids_nao_vinculados = set(exames_ids) - set(exames_atuais)
@@ -324,7 +307,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def definir_exames(self, request, pk=None):
-        """Define todos os exames da ocorrência substituindo os existentes"""
         ocorrencia = self.get_object()
         
         if ocorrencia.esta_finalizada:
@@ -349,7 +331,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Validação de IDs existentes
         if exames_ids:
             from exames.models import Exame
             existing_ids = list(Exame.objects.filter(id__in=exames_ids).values_list('id', flat=True))
@@ -370,7 +351,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def exames_disponiveis(self, request):
-        """Lista exames disponíveis com filtros para seleção"""
         from exames.models import Exame
         
         search = request.GET.get('search', '')
@@ -388,7 +368,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         if servico_pericial_id:
             queryset = queryset.filter(servico_pericial_id=servico_pericial_id)
         
-        # Paginação
         total = queryset.count()
         start = (page - 1) * page_size
         end = start + page_size
@@ -411,7 +390,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'])
     def exames_atuais(self, request, pk=None):
-        """Mostra exames atualmente vinculados à ocorrência"""
         ocorrencia = self.get_object()
         
         from exames.serializers import ExameNestedSerializer
@@ -427,13 +405,8 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             'total_exames': ocorrencia.exames_solicitados.count()
         })
 
-    # ===== RELATÓRIOS PDF =====
     @action(detail=False, methods=['get'], url_path='relatorio-perito/(?P<perito_id>[^/.]+)')
     def relatorio_por_perito(self, request, perito_id=None, *args, **kwargs):
-        """
-        Gera PDF com ocorrências de um perito específico.
-        GET /api/ocorrencias/relatorio-perito/123/
-        """
         try:
             perito_id = int(perito_id)
         except ValueError:
@@ -446,10 +419,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='relatorio-ano/(?P<ano>[^/.]+)')
     def relatorio_por_ano(self, request, ano=None, *args, **kwargs):
-        """
-        Gera PDF com ocorrências de um ano específico.
-        GET /api/ocorrencias/relatorio-ano/2025/
-        """
         try:
             ano = int(ano)
             if ano < 2000 or ano > 2050:
@@ -464,12 +433,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='relatorio-status/(?P<status_param>[^/.]+)')
     def relatorio_por_status(self, request, status_param=None, *args, **kwargs):
-        """
-        Gera PDF com ocorrências de um status específico.
-        GET /api/ocorrencias/relatorio-status/EM_ANDAMENTO/
-        GET /api/ocorrencias/relatorio-status/FINALIZADA/
-        """
-        # Verifica se o status é válido
         status_validos = [choice[0] for choice in Ocorrencia.Status.choices]
         if status_param not in status_validos:
             return Response(
@@ -481,10 +444,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='relatorio-servico/(?P<servico_id>[^/.]+)')
     def relatorio_por_servico(self, request, servico_id=None, *args, **kwargs):
-        """
-        Gera PDF com ocorrências de um serviço pericial específico.
-        GET /api/ocorrencias/relatorio-servico/123/
-        """
         try:
             servico_id = int(servico_id)
         except ValueError:
@@ -497,10 +456,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='relatorio-cidade/(?P<cidade_id>[^/.]+)')
     def relatorio_por_cidade(self, request, cidade_id=None, *args, **kwargs):
-        """
-        Gera PDF com ocorrências de uma cidade específica.
-        GET /api/ocorrencias/relatorio-cidade/123/
-        """
         try:
             cidade_id = int(cidade_id)
         except ValueError:
@@ -513,8 +468,268 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='relatorio-geral')
     def relatorio_geral(self, request, *args, **kwargs):
-        """
-        Gera PDF com todas as ocorrências (listagem geral).
-        GET /api/ocorrencias/relatorio-geral/
-        """
         return gerar_pdf_relatorio_geral(request)
+    
+    
+    @action(detail=False, methods=['get'])
+    def estatisticas(self, request):
+        user = request.user
+        hoje = timezone.now().date()
+        inicio_mes = hoje.replace(day=1)
+        servico_id = request.GET.get('servico_id', None)
+        
+        # Tratar valores inválidos como None
+        if servico_id in ['null', '', 'undefined']:
+            servico_id = None
+        
+        if user.perfil == 'PERITO':
+            minhas = Ocorrencia.objects.filter(
+                perito_atribuido=user, 
+                deleted_at__isnull=True
+            )
+            
+            if servico_id:
+                minhas = minhas.filter(servico_pericial_id=servico_id)
+                servicos_ids = [int(servico_id)]
+            else:
+                servicos_ids = list(user.servicos_periciais.values_list('id', flat=True))
+            
+            do_servico = Ocorrencia.objects.filter(
+                servico_pericial_id__in=servicos_ids,
+                deleted_at__isnull=True
+            )
+            
+            data_limite = hoje - timedelta(days=20)
+            atrasadas = minhas.filter(
+                status__in=['AGUARDANDO_PERITO', 'EM_ANALISE'],
+                created_at__date__lt=data_limite
+            )
+            
+            finalizadas_mes = minhas.filter(
+                status='FINALIZADA',
+                data_finalizacao__gte=inicio_mes
+            )
+            
+            ultimas = minhas.order_by('-created_at')[:5].values(
+                'id', 'numero_ocorrencia', 'status', 'created_at'
+            )
+            
+            total_minhas = minhas.count()
+            total_finalizadas = minhas.filter(status='FINALIZADA').count()
+            taxa_finalizacao = (total_finalizadas / total_minhas * 100) if total_minhas > 0 else 0
+            
+            total_servico = do_servico.count()
+            participacao = (total_minhas / total_servico * 100) if total_servico > 0 else 0
+            
+            meus_servicos = ServicoPericial.objects.filter(
+                id__in=servicos_ids,
+                deleted_at__isnull=True
+            )
+            
+            por_servico = []
+            for servico in meus_servicos:
+                total = minhas.filter(servico_pericial=servico).count()
+                por_servico.append({
+                    'servico_pericial__sigla': servico.sigla,
+                    'servico_pericial__nome': servico.nome,
+                    'total': total
+                })
+            
+            por_servico = sorted(por_servico, key=lambda x: x['total'], reverse=True)
+            
+            return Response({
+                'minhas_ocorrencias': {
+                    'total': total_minhas,
+                    'aguardando': minhas.filter(status='AGUARDANDO_PERITO').count(),
+                    'em_analise': minhas.filter(status='EM_ANALISE').count(),
+                    'finalizadas': total_finalizadas,
+                    'atrasadas': atrasadas.count(),
+                    'finalizadas_este_mes': finalizadas_mes.count(),
+                    'taxa_finalizacao': round(taxa_finalizacao, 1),
+                },
+                'servico': {
+                    'total_geral': total_servico,
+                    'minha_participacao': round(participacao, 1),
+                },
+                'ultimas_ocorrencias': list(ultimas),
+                'por_servico': por_servico
+            })
+        
+        elif user.perfil == 'OPERACIONAL':
+            servicos_ids = list(user.servicos_periciais.values_list('id', flat=True))
+            
+            if servico_id:
+                servicos_ids = [int(servico_id)] if int(servico_id) in servicos_ids else servicos_ids
+            
+            todas = Ocorrencia.objects.filter(
+                servico_pericial_id__in=servicos_ids,
+                deleted_at__isnull=True
+            )
+            
+            data_limite = hoje - timedelta(days=20)
+            atrasadas = todas.filter(
+                status__in=['AGUARDANDO_PERITO', 'EM_ANALISE'],
+                created_at__date__lt=data_limite
+            )
+            
+            finalizadas_mes = todas.filter(
+                status='FINALIZADA',
+                data_finalizacao__gte=inicio_mes
+            )
+            
+            meus_servicos = ServicoPericial.objects.filter(
+                id__in=servicos_ids,
+                deleted_at__isnull=True
+            )
+            
+            por_servico = []
+            for servico in meus_servicos:
+                total = todas.filter(servico_pericial=servico).count()
+                por_servico.append({
+                    'servico_pericial__sigla': servico.sigla,
+                    'servico_pericial__nome': servico.nome,
+                    'total': total
+                })
+            
+            por_servico = sorted(por_servico, key=lambda x: x['total'], reverse=True)
+            
+            dias_30 = hoje - timedelta(days=30)
+            criadas_30dias = todas.filter(created_at__date__gte=dias_30).count()
+            finalizadas_30dias = todas.filter(
+                status='FINALIZADA',
+                data_finalizacao__gte=dias_30
+            ).count()
+            
+            return Response({
+                'geral': {
+                    'total': todas.count(),
+                    'aguardando': todas.filter(status='AGUARDANDO_PERITO').count(),
+                    'em_analise': todas.filter(status='EM_ANALISE').count(),
+                    'finalizadas': todas.filter(status='FINALIZADA').count(),
+                    'sem_perito': todas.filter(perito_atribuido__isnull=True).count(),
+                    'atrasadas': atrasadas.count(),
+                    'finalizadas_este_mes': finalizadas_mes.count(),
+                },
+                'ultimos_30_dias': {
+                    'criadas': criadas_30dias,
+                    'finalizadas': finalizadas_30dias,
+                },
+                'por_servico': por_servico
+            })
+        
+        elif user.perfil == 'ADMINISTRATIVO' or user.is_superuser:
+            todas = Ocorrencia.objects.filter(deleted_at__isnull=True)
+            
+            if servico_id:
+                todas = todas.filter(servico_pericial_id=servico_id)
+            
+            data_limite = hoje - timedelta(days=20)
+            atrasadas = todas.filter(
+                status__in=['AGUARDANDO_PERITO', 'EM_ANALISE'],
+                created_at__date__lt=data_limite
+            )
+            
+            finalizadas_mes = todas.filter(
+                status='FINALIZADA',
+                data_finalizacao__gte=inicio_mes
+            )
+            
+            if servico_id:
+                todos_servicos = ServicoPericial.objects.filter(
+                    id=servico_id,
+                    deleted_at__isnull=True
+                )
+            else:
+                todos_servicos = ServicoPericial.objects.filter(deleted_at__isnull=True)
+            
+            por_servico = []
+            for servico in todos_servicos:
+                total = todas.filter(servico_pericial=servico).count()
+                por_servico.append({
+                    'servico_pericial__sigla': servico.sigla,
+                    'servico_pericial__nome': servico.nome,
+                    'total': total
+                })
+            
+            por_servico = sorted(por_servico, key=lambda x: x['total'], reverse=True)
+            
+            dias_30 = hoje - timedelta(days=30)
+            criadas_30dias = todas.filter(created_at__date__gte=dias_30).count()
+            finalizadas_30dias = todas.filter(
+                status='FINALIZADA',
+                data_finalizacao__gte=dias_30
+            ).count()
+            
+            return Response({
+                'geral': {
+                    'total': todas.count(),
+                    'aguardando': todas.filter(status='AGUARDANDO_PERITO').count(),
+                    'em_analise': todas.filter(status='EM_ANALISE').count(),
+                    'finalizadas': todas.filter(status='FINALIZADA').count(),
+                    'sem_perito': todas.filter(perito_atribuido__isnull=True).count(),
+                    'atrasadas': atrasadas.count(),
+                    'finalizadas_este_mes': finalizadas_mes.count(),
+                },
+                'ultimos_30_dias': {
+                    'criadas': criadas_30dias,
+                    'finalizadas': finalizadas_30dias,
+                },
+                'por_servico': por_servico
+            })
+        
+        return Response({'detail': 'Perfil não reconhecido'}, status=400)
+    
+    # Em OcorrenciaViewSet
+    @action(detail=True, methods=['post'])
+    def vincular_procedimento(self, request, pk=None):
+        """Vincula um procedimento a uma ocorrência que não possui procedimento"""
+        ocorrencia = self.get_object()
+        
+        # Validação: Já tem procedimento?
+        if ocorrencia.procedimento_cadastrado:
+            if not request.user.is_superuser:
+                return Response({
+                    'error': f'Esta ocorrência já está vinculada ao procedimento {ocorrencia.procedimento_cadastrado}. Apenas super administradores podem alterar.'
+                }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Validação: Ocorrência finalizada?
+        if ocorrencia.esta_finalizada:
+            return Response({
+                'error': 'Não é possível vincular procedimento a uma ocorrência finalizada.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        procedimento_id = request.data.get('procedimento_cadastrado_id')
+        
+        if not procedimento_id:
+            return Response({
+                'error': 'procedimento_cadastrado_id é obrigatório.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            from procedimentos_cadastrados.models import ProcedimentoCadastrado
+            procedimento = ProcedimentoCadastrado.objects.get(id=procedimento_id)
+            
+            # Log da vinculação (importante para auditoria)
+            old_procedimento = ocorrencia.procedimento_cadastrado
+            ocorrencia.procedimento_cadastrado = procedimento
+            ocorrencia.updated_by = request.user
+            ocorrencia.save()
+            
+            # Opcional: criar log específico
+            # HistoricoVinculacao.objects.create(
+            #     ocorrencia=ocorrencia,
+            #     procedimento_antigo=old_procedimento,
+            #     procedimento_novo=procedimento,
+            #     usuario=request.user
+            # )
+            
+            serializer = self.get_serializer(ocorrencia)
+            return Response({
+                'message': f'Procedimento {procedimento} vinculado com sucesso.',
+                'ocorrencia': serializer.data
+            })
+            
+        except ProcedimentoCadastrado.DoesNotExist:
+            return Response({
+                'error': 'Procedimento não encontrado.'
+            }, status=status.HTTP_404_NOT_FOUND)

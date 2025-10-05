@@ -28,7 +28,7 @@ class AutoridadeViewSet(viewsets.ModelViewSet):
         serializer.save(created_by=self.request.user)
 
     def perform_update(self, serializer):
-        serializer.save(updated_by=self.request.user)
+        serializer.save(updated_by=self.request.user) 
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()

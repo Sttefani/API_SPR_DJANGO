@@ -206,6 +206,19 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         return data
 
     def update(self, instance, validated_data):
+    # VALIDAÇÃO: Bloquear alteração de procedimento vinculado
+        if 'procedimento_cadastrado' in validated_data:
+            novo_procedimento = validated_data.get('procedimento_cadastrado')
+            procedimento_atual = instance.procedimento_cadastrado
+            
+            # Se já tem procedimento e está tentando mudar/remover
+            if procedimento_atual and novo_procedimento != procedimento_atual:
+                user = self.context['request'].user
+                if not user.is_superuser:
+                    raise serializers.ValidationError({
+                        'procedimento_cadastrado': 'Esta ocorrência já possui um procedimento vinculado. Use o endpoint /vincular_procedimento/ ou contate um administrador.'
+                    })
+        
         # Extrai exames antes do update
         exames_ids = validated_data.pop('exames_ids', None)
         

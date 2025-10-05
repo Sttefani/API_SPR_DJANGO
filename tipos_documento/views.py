@@ -14,6 +14,12 @@ class TipoDocumentoViewSet(viewsets.ModelViewSet):
     search_fields = ['nome']
     # ← REMOVA a linha: pagination_class = None
     
+    @action(detail=False, methods=['get'], pagination_class=None)
+    def dropdown(self, request):
+        queryset = TipoDocumento.objects.all().order_by('nome')
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+    
     def get_queryset(self):
         if self.action in ['restaurar', 'lixeira']:
             return TipoDocumento.all_objects.all()
