@@ -67,3 +67,20 @@ class PeritoAtribuidoRequired(BasePermission):
         # 'obj' aqui é a instância da ocorrência que estamos tentando acessar.
         # A permissão é concedida se o campo 'perito_atribuido' não for nulo.
         return obj.perito_atribuido is not None
+    
+class PodeVerRelatoriosGerenciais(BasePermission):
+    """
+    Permite o acesso a relatórios e estatísticas gerenciais apenas para perfis
+    ADMINISTRATIVO ou Super Admin.
+    """
+    message = "Você não tem permissão para acessar informações gerenciais."
+
+    def has_permission(self, request, view):
+        # Garante que o usuário está logado antes de qualquer verificação
+        if not request.user or not request.user.is_authenticated:
+            return False
+        
+        # Libera o acesso se for Super Admin OU se tiver o perfil ADMINISTRATIVO
+        return request.user.is_superuser or request.user.perfil == 'ADMINISTRATIVO'
+
+# --- FIM DO NOVO CÓDIGO ---

@@ -1,70 +1,47 @@
-# ocorrencias/views.py
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
-from django.db.models import Q
-from django.utils import timezone
-from datetime import timedelta
-from django.db.models import Count
+from django.db.models import Q, Count, F, Case, When
+from datetime import timedelta, datetime
 from servicos_periciais.models import ServicoPericial
+from usuarios.models import User
+from classificacoes.models import ClassificacaoOcorrencia
 
 from .models import Ocorrencia
 from .serializers import (
-    OcorrenciaCreateSerializer,
-    OcorrenciaListSerializer, 
-    OcorrenciaDetailSerializer,
-    OcorrenciaUpdateSerializer,
-    OcorrenciaLixeiraSerializer, 
-    FinalizarComAssinaturaSerializer,
-    ReabrirOcorrenciaSerializer
+    OcorrenciaCreateSerializer, OcorrenciaListSerializer, OcorrenciaDetailSerializer,
+    OcorrenciaUpdateSerializer, OcorrenciaLixeiraSerializer, 
+    FinalizarComAssinaturaSerializer, ReabrirOcorrenciaSerializer
 )
 from .permissions import (
-    OcorrenciaPermission, 
-    PodeEditarOcorrencia, 
-    PodeFinalizarOcorrencia, 
-    PodeReabrirOcorrencia,
-    PeritoAtribuidoRequired
+    OcorrenciaPermission, PodeEditarOcorrencia, PodeFinalizarOcorrencia, 
+    PodeReabrirOcorrencia, PeritoAtribuidoRequired, PodeVerRelatoriosGerenciais
 )
 from .filters import OcorrenciaFilter
 from .pdf_generator import (
-    gerar_pdf_ocorrencia,
-    gerar_pdf_ocorrencias_por_perito,
-    gerar_pdf_ocorrencias_por_ano,
-    gerar_pdf_ocorrencias_por_status,
-    gerar_pdf_ocorrencias_por_servico,
-    gerar_pdf_ocorrencias_por_cidade,
-    gerar_pdf_relatorio_geral
+    gerar_pdf_ocorrencia, gerar_pdf_ocorrencias_por_perito, gerar_pdf_ocorrencias_por_ano,
+    gerar_pdf_ocorrencias_por_status, gerar_pdf_ocorrencias_por_servico,
+    gerar_pdf_ocorrencias_por_cidade, gerar_pdf_relatorio_geral
 )
 
 
 class OcorrenciaViewSet(viewsets.ModelViewSet):
     queryset = Ocorrencia.all_objects.select_related(
-        'servico_pericial',
-        'unidade_demandante',
-        'autoridade__cargo',
-        'cidade',
-        'classificacao',
+        'servico_pericial', 'unidade_demandante', 'autoridade__cargo', 'cidade',
+        'classificacao', 'classificacao__parent',
         'procedimento_cadastrado__tipo_procedimento',
-        'tipo_documento_origem',
-        'perito_atribuido',
-        'created_by',
-        'updated_by',
-        'finalizada_por',
-        'reaberta_por',
-        'ficha_local_crime',
-        'ficha_acidente_transito',
-        'ficha_constatacao_substancia',
-        'ficha_documentoscopia',
-        'ficha_material_diverso'
-    ).prefetch_related(
-        'exames_solicitados'
-    ).all()
+        'tipo_documento_origem', 'perito_atribuido', 'created_by', 'updated_by',
+        'finalizada_por', 'reaberta_por', 'ficha_local_crime', 'ficha_acidente_transito',
+        'ficha_constatacao_substancia', 'ficha_documentoscopia', 'ficha_material_diverso'
+    ).prefetch_related('exames_solicitados').all()
     permission_classes = [OcorrenciaPermission]
     filterset_class = OcorrenciaFilter
     search_fields = ['numero_ocorrencia', 'perito_atribuido__nome_completo', 'autoridade__nome']
     
     def get_permissions(self):
+        if self.action == 'relatorios_gerenciais':
+            return [PodeVerRelatoriosGerenciais()]
         if self.action in ['adicionar_exames', 'remover_exames']:
             return [PeritoAtribuidoRequired()]
         if self.action == 'finalizar':
@@ -104,17 +81,90 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             deleted_at__isnull=True
         )
 
+    @action(detail=False, methods=['get'], url_path='relatorios-gerenciais')
+    def relatorios_gerenciais(self, request):
+        queryset = self.get_queryset()
+
+        data_inicio_str = request.query_params.get('data_inicio')
+        data_fim_str = request.query_params.get('data_fim')
+        servico_id = request.query_params.get('servico_id')
+        cidade_id = request.query_params.get('cidade_id')
+        perito_id = request.query_params.get('perito_id')
+        classificacao_id = request.query_params.get('classificacao_id')
+
+        try:
+            if data_inicio_str:
+                queryset = queryset.filter(created_at__date__gte=datetime.strptime(data_inicio_str, '%Y-%m-%d').date())
+            if data_fim_str:
+                queryset = queryset.filter(created_at__date__lte=datetime.strptime(data_fim_str, '%Y-%m-%d').date())
+            if servico_id:
+                queryset = queryset.filter(servico_pericial_id=servico_id)
+            if cidade_id:
+                queryset = queryset.filter(cidade_id=cidade_id)
+            if perito_id:
+                queryset = queryset.filter(perito_atribuido_id=perito_id)
+            if classificacao_id:
+                try:
+                    classificacao = ClassificacaoOcorrencia.objects.get(pk=classificacao_id)
+                    descendentes = classificacao.subgrupos.all().values_list('pk', flat=True)
+                    ids_para_filtrar = [classificacao.id] + list(descendentes)
+                    queryset = queryset.filter(classificacao_id__in=ids_para_filtrar)
+                except ClassificacaoOcorrencia.DoesNotExist:
+                    pass
+        except (ValueError, TypeError):
+            return Response({'error': 'Formato de filtro inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Relatório 1: Agrupado pelo Grupo Pai da Classificação
+        por_grupo_principal = queryset.annotate(
+            grupo_nome=Case(
+                When(classificacao__parent__isnull=False, then=F('classificacao__parent__nome')),
+                default=F('classificacao__nome')
+            )
+        ).values('grupo_nome').annotate(total=Count('id')).order_by('-total')
+
+        # Relatório 2: Agrupado por cada Classificação Específica (código e subcódigo)
+        por_classificacao_especifica = queryset.values(
+            'classificacao__codigo', 'classificacao__nome'
+        ).annotate(total=Count('id')).order_by('classificacao__codigo')
+
+        # Relatório 3: Produção por Perito
+        peritos_queryset = User.objects.filter(perfil='PERITO', status='ATIVO')
+        if perito_id:
+            peritos_queryset = peritos_queryset.filter(id=perito_id)
+        por_perito = peritos_queryset.annotate(
+            total_ocorrencias=Count('ocorrencias_atribuidas', filter=Q(ocorrencias_atribuidas__in=queryset)),
+            finalizadas=Count('ocorrencias_atribuidas', filter=Q(ocorrencias_atribuidas__in=queryset, ocorrencias_atribuidas__status='FINALIZADA')),
+            em_analise=Count('ocorrencias_atribuidas', filter=Q(ocorrencias_atribuidas__in=queryset, ocorrencias_atribuidas__status='EM_ANALISE'))
+        ).values('nome_completo', 'total_ocorrencias', 'finalizadas', 'em_analise').order_by('-total_ocorrencias')
+
+        return Response({
+            'por_grupo_principal': list(por_grupo_principal),
+            'por_classificacao_especifica': list(por_classificacao_especifica),
+            'producao_por_perito': list(por_perito),
+        })
+    
+    # ... (o resto do seu arquivo, sem nenhuma outra alteração)
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
     
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
     
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        
+    # ← IMPORTANTE: Retorna com OcorrenciaDetailSerializer que tem todos os campos
+        return Response(OcorrenciaDetailSerializer(instance, context={'request': request}).data)
+    
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         instance.soft_delete(user=self.request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)
-
+    
     @action(detail=False, methods=['get'])
     def lixeira(self, request):
         queryset = self.get_queryset().filter(deleted_at__isnull=False)
@@ -473,12 +523,11 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def estatisticas(self, request):
-        user = request.user
+        user = self.request.user
         hoje = timezone.now().date()
         inicio_mes = hoje.replace(day=1)
         servico_id = request.GET.get('servico_id', None)
         
-        # Tratar valores inválidos como None
         if servico_id in ['null', '', 'undefined']:
             servico_id = None
         
@@ -679,20 +728,18 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         
         return Response({'detail': 'Perfil não reconhecido'}, status=400)
     
-    # Em OcorrenciaViewSet
     @action(detail=True, methods=['post'])
     def vincular_procedimento(self, request, pk=None):
-        """Vincula um procedimento a uma ocorrência que não possui procedimento"""
+        """
+        Vincula um procedimento a uma ocorrência e registra a alteração para fins de auditoria.
+        """
         ocorrencia = self.get_object()
         
-        # Validação: Já tem procedimento?
-        if ocorrencia.procedimento_cadastrado:
-            if not request.user.is_superuser:
-                return Response({
-                    'error': f'Esta ocorrência já está vinculada ao procedimento {ocorrencia.procedimento_cadastrado}. Apenas super administradores podem alterar.'
-                }, status=status.HTTP_403_FORBIDDEN)
+        if ocorrencia.procedimento_cadastrado and not request.user.is_superuser:
+            return Response({
+                'error': f'Esta ocorrência já está vinculada ao procedimento {ocorrencia.procedimento_cadastrado}. Apenas super administradores podem alterar.'
+            }, status=status.HTTP_403_FORBIDDEN)
         
-        # Validação: Ocorrência finalizada?
         if ocorrencia.esta_finalizada:
             return Response({
                 'error': 'Não é possível vincular procedimento a uma ocorrência finalizada.'
@@ -702,34 +749,39 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         
         if not procedimento_id:
             return Response({
-                'error': 'procedimento_cadastrado_id é obrigatório.'
+                'error': 'O campo `procedimento_cadastrado_id` é obrigatório.'
             }, status=status.HTTP_400_BAD_REQUEST)
         
         try:
             from procedimentos_cadastrados.models import ProcedimentoCadastrado
-            procedimento = ProcedimentoCadastrado.objects.get(id=procedimento_id)
+            from .models import HistoricoVinculacao
+
+            procedimento_novo = ProcedimentoCadastrado.objects.get(id=procedimento_id)
             
-            # Log da vinculação (importante para auditoria)
-            old_procedimento = ocorrencia.procedimento_cadastrado
-            ocorrencia.procedimento_cadastrado = procedimento
+            procedimento_antigo = ocorrencia.procedimento_cadastrado
+            
+            ocorrencia.procedimento_cadastrado = procedimento_novo
             ocorrencia.updated_by = request.user
-            ocorrencia.save()
+            ocorrencia.save(update_fields=['procedimento_cadastrado', 'updated_by', 'updated_at'])
             
-            # Opcional: criar log específico
-            # HistoricoVinculacao.objects.create(
-            #     ocorrencia=ocorrencia,
-            #     procedimento_antigo=old_procedimento,
-            #     procedimento_novo=procedimento,
-            #     usuario=request.user
-            # )
+            HistoricoVinculacao.objects.create(
+                ocorrencia=ocorrencia,
+                procedimento_antigo=procedimento_antigo,
+                procedimento_novo=procedimento_novo,
+                usuario=request.user
+            )
             
             serializer = self.get_serializer(ocorrencia)
             return Response({
-                'message': f'Procedimento {procedimento} vinculado com sucesso.',
+                'message': f'Procedimento {procedimento_novo} vinculado com sucesso e a alteração foi registrada.',
                 'ocorrencia': serializer.data
             })
             
         except ProcedimentoCadastrado.DoesNotExist:
             return Response({
-                'error': 'Procedimento não encontrado.'
+                'error': 'Procedimento com o ID fornecido não foi encontrado.'
             }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': f'Ocorreu um erro inesperado no servidor: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

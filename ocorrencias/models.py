@@ -3,7 +3,7 @@
 import datetime
 from django.db import models
 from django.conf import settings
-from django.utils import timezone  # ADICIONADO
+from django.utils import timezone
 
 # Importando os modelos dos nossos outros apps
 from usuarios.models import AuditModel
@@ -39,10 +39,10 @@ class Ocorrencia(AuditModel):
         verbose_name="Autoridade Demandante"
     )
     data_fato = models.DateField(
-    verbose_name="Data do Fato",
-    null=True,    # ← permite NULL no banco
-    blank=True    # ← permite vazio no formulário
-)
+        verbose_name="Data do Fato",
+        null=True,
+        blank=True
+    )
     hora_fato = models.TimeField(null=True, blank=True, verbose_name="Hora do Fato")
     cidade = models.ForeignKey(Cidade, on_delete=models.PROTECT, related_name="ocorrencias",
                                verbose_name="Cidade do Fato")
@@ -140,16 +140,13 @@ class Ocorrencia(AuditModel):
     # PROPRIEDADES PARA ASSINATURA
     @property 
     def esta_finalizada(self):
-        """Verifica se a ocorrência está finalizada com assinatura"""
         return self.status == 'FINALIZADA' and self.finalizada_por is not None
 
     @property
     def pode_ser_editada(self):
-        """Verifica se pode ser editada (não finalizada)"""
         return not self.esta_finalizada
 
     def finalizar_com_assinatura(self, user, ip_address):
-        """Finaliza a ocorrência com assinatura digital"""
         self.status = 'FINALIZADA'
         self.data_finalizacao = timezone.now()
         self.finalizada_por = user
@@ -158,7 +155,6 @@ class Ocorrencia(AuditModel):
         self.save()
 
     def reabrir(self, user, motivo, ip_address):
-        """Reabre a ocorrência (apenas super admin)"""
         self.status = 'EM_ANALISE'
         self.data_finalizacao = None
         self.reaberta_por = user
@@ -169,14 +165,12 @@ class Ocorrencia(AuditModel):
 
     # MÉTODO SAVE EXISTENTE
     def save(self, *args, **kwargs):
-        # Gera o número da ocorrência apenas na primeira vez que o objeto é criado
         if not self.pk:
             now = datetime.datetime.now()
             servico_sigla = self.servico_pericial.sigla
             timestamp = now.strftime('%Y%m%d%H%M%S')
             self.numero_ocorrencia = f"{timestamp}/{servico_sigla}"
 
-        # Atualiza o cronômetro do histórico se o texto mudou (apenas em edições)
         if self.pk:
             try:
                 versao_antiga = Ocorrencia.objects.get(pk=self.pk)
@@ -185,17 +179,12 @@ class Ocorrencia(AuditModel):
             except Ocorrencia.DoesNotExist:
                 pass
 
-        # LÓGICA DE STATUS MELHORADA
-        # Só altera o status automaticamente se não estiver finalizada
         if self.status != self.Status.FINALIZADA:
             if self.perito_atribuido:
-                # Se um perito foi atribuído, muda para EM_ANALISE
                 self.status = self.Status.EM_ANALISE
             else:
-                # Se não há perito, volta para AGUARDANDO_PERITO
                 self.status = self.Status.AGUARDANDO_PERITO
 
-        # Padroniza campos para caixa alta
         if self.numero_documento_origem:
             self.numero_documento_origem = self.numero_documento_origem.upper()
         if self.processo_sei_numero:
@@ -210,3 +199,51 @@ class Ocorrencia(AuditModel):
         verbose_name = "Ocorrência"
         verbose_name_plural = "Ocorrências"
         ordering = ['-created_at']
+
+# --- INÍCIO DO NOVO CÓDIGO (SEGURO E ADITIVO) ---
+
+class HistoricoVinculacao(models.Model):
+    """
+    Modelo para registrar (auditar) a troca de um procedimento vinculado a uma ocorrência.
+    Esta tabela serve como um log, garantindo a rastreabilidade das alterações.
+    """
+    ocorrencia = models.ForeignKey(
+        Ocorrencia, 
+        on_delete=models.CASCADE, 
+        related_name="historico_vinculacao",
+        verbose_name="Ocorrência Modificada"
+    )
+    procedimento_antigo = models.ForeignKey(
+        ProcedimentoCadastrado, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name="+", # O '+' impede a criação de uma relação reversa, economizando recursos.
+        verbose_name="Procedimento Anterior"
+    )
+    procedimento_novo = models.ForeignKey(
+        ProcedimentoCadastrado, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        related_name="+",
+        verbose_name="Procedimento Novo"
+    )
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.PROTECT,
+        verbose_name="Usuário Responsável"
+    )
+    timestamp = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Data e Hora da Alteração"
+    )
+
+    def __str__(self):
+        return f"Log de {self.ocorrencia.numero_ocorrencia} em {self.timestamp.strftime('%d/%m/%Y %H:%M')}"
+
+    class Meta:
+        verbose_name = "Histórico de Vinculação"
+        verbose_name_plural = "Históricos de Vinculação"
+        ordering = ['-timestamp']
+
+# --- FIM DO NOVO CÓDIGO ---

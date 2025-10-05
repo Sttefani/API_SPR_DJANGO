@@ -142,6 +142,30 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         required=False, allow_null=True, 
         label="Procedimento"
     )
+    classificacao_id = serializers.PrimaryKeyRelatedField(
+        queryset=ClassificacaoOcorrencia.objects.all(),
+        source='classificacao',
+        required=False,
+        label="Classificação"
+    )
+    unidade_demandante_id = serializers.PrimaryKeyRelatedField(
+        queryset=UnidadeDemandante.objects.all(),
+        source='unidade_demandante',
+        required=False,
+        label="Unidade Demandante"
+    )
+    autoridade_id = serializers.PrimaryKeyRelatedField(
+        queryset=Autoridade.objects.all(),
+        source='autoridade',
+        required=False,
+        label="Autoridade"
+    )
+    cidade_id = serializers.PrimaryKeyRelatedField(
+        queryset=Cidade.objects.all(),
+        source='cidade',
+        required=False,
+        label="Cidade"
+    )
     
     # Campo para exames
     exames_ids = serializers.ListField(
@@ -158,11 +182,22 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Ocorrencia
         fields = [
-            'historico', 'processo_sei_numero', 'numero_documento_origem', 'data_documento_origem',
-            'tipo_documento_origem_id', 'procedimento_cadastrado_id', 'perito_atribuido_id',
-            'exames_ids', 'exames_solicitados'
+            'classificacao_id',
+            'unidade_demandante_id',
+            'autoridade_id',
+            'cidade_id',
+            'historico', 
+            'processo_sei_numero', 
+            'numero_documento_origem', 
+            'data_documento_origem',
+            'tipo_documento_origem_id', 
+            'procedimento_cadastrado_id', 
+            'perito_atribuido_id',
+            'exames_ids', 
+            'exames_solicitados'
         ]
 
+    # ... resto dos métodos validate_exames_ids, validate e update permanecem iguais
     def validate_exames_ids(self, value):
         """Valida se os exames existem"""
         if not value:
