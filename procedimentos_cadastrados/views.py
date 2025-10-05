@@ -2,6 +2,8 @@ from rest_framework import viewsets, status, filters, serializers
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.db import IntegrityError
+from django.db.models import Q
+import re
 from .models import ProcedimentoCadastrado
 from .serializers import ProcedimentoCadastradoSerializer, ProcedimentoCadastradoLixeiraSerializer
 from .permissions import ProcedimentoCadastradoPermission
@@ -9,13 +11,42 @@ from .permissions import ProcedimentoCadastradoPermission
 class ProcedimentoCadastradoViewSet(viewsets.ModelViewSet):
     queryset = ProcedimentoCadastrado.objects.select_related('tipo_procedimento').all().order_by('-ano', '-numero')
     permission_classes = [ProcedimentoCadastradoPermission]
-    filter_backends = [filters.SearchFilter]
+    filter_backends = []
     search_fields = ['numero', 'ano', 'tipo_procedimento__sigla', 'tipo_procedimento__nome']
-    
+
     def get_queryset(self):
         if self.action in ['restaurar', 'lixeira']:
             return ProcedimentoCadastrado.all_objects.select_related('tipo_procedimento').all()
-        return super().get_queryset()
+
+        queryset = super().get_queryset()
+        search_term = self.request.query_params.get('search', None)
+
+        if not search_term:
+            return queryset
+
+        pattern = re.compile(r'([A-Z\s-]+)\s*-\s*(\w+)\s*/\s*(\d{4})', re.IGNORECASE)
+        match = pattern.match(search_term.strip())
+
+        if match:
+            sigla, numero, ano = match.groups()
+            return queryset.filter(
+                tipo_procedimento__sigla__iexact=sigla.strip(),
+                numero__iexact=numero.strip(),
+                ano=ano
+            )
+        else:
+            try:
+                ano_busca = int(search_term)
+                ano_filter = Q(ano=ano_busca)
+            except ValueError:
+                ano_filter = Q()
+
+            return queryset.filter(
+                Q(numero__icontains=search_term) |
+                Q(tipo_procedimento__sigla__icontains=search_term) |
+                Q(tipo_procedimento__nome__icontains=search_term) |
+                ano_filter
+            ).distinct()
 
     def get_serializer_class(self):
         if self.action == 'lixeira':
@@ -63,7 +94,7 @@ class ProcedimentoCadastradoViewSet(viewsets.ModelViewSet):
         instance.restore()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
-    
+
     @action(detail=False, methods=['get'])
     def verificar_existente(self, request):
         tipo_procedimento_id = request.GET.get('tipo_procedimento_id')
@@ -90,7 +121,6 @@ class ProcedimentoCadastradoViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['get'])
     def ocorrencias_vinculadas(self, request, pk=None):
-        """Retorna todas as ocorrências vinculadas a este procedimento"""
         procedimento = self.get_object()
         ocorrencias = procedimento.ocorrencias.all().order_by('-created_at')
         
