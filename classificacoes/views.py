@@ -1,6 +1,7 @@
 from rest_framework import viewsets, status, filters
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from django.db.models import Q
 from .models import ClassificacaoOcorrencia
 from .serializers import ClassificacaoOcorrenciaSerializer, ClassificacaoOcorrenciaLixeiraSerializer
 from .permissions import ClassificacaoPermission
@@ -11,7 +12,7 @@ class ClassificacaoOcorrenciaViewSet(viewsets.ModelViewSet):
     permission_classes = [ClassificacaoPermission]
     filter_backends = [filters.SearchFilter]
     search_fields = ['codigo', 'nome']
-    pagination_class = None  # ← DESABILITA PAGINAÇÃO
+    pagination_class = None
     
     def get_queryset(self):
         if self.action in ['restaurar', 'lixeira']:
@@ -49,8 +50,34 @@ class ClassificacaoOcorrenciaViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
     
+    # --- INÍCIO DA SEÇÃO MODIFICADA ---
     @action(detail=False, methods=['get'], pagination_class=None)
     def dropdown(self, request):
         queryset = ClassificacaoOcorrencia.objects.all().order_by('codigo')
+        servico_id = request.query_params.get('servico_id')
+
+        if servico_id:
+            try:
+                servico_id = int(servico_id)
+            except (ValueError, TypeError):
+                return Response(status=status.HTTP_400_BAD_REQUEST)
+
+            # 1. Encontra os IDs dos Grupos Principais associados ao serviço
+            grupos_pais_ids = ClassificacaoOcorrencia.objects.filter(
+                parent__isnull=True,
+                servicos_periciais__id=servico_id
+            ).values_list('id', flat=True)
+
+            # 2. Filtra o queryset para retornar apenas classificações "folha" que obedecem à regra de herança
+            queryset = queryset.filter(
+                Q(subgrupos__isnull=True) & 
+                (
+                    Q(parent_id__in=grupos_pais_ids) |
+                    Q(servicos_periciais__id=servico_id) |
+                    Q(servicos_periciais__isnull=True)
+                )
+            ).distinct()
+
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+    # --- FIM DA SEÇÃO MODIFICADA ---

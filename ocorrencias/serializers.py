@@ -3,14 +3,9 @@
 from rest_framework import serializers
 from django.utils import timezone
 import datetime
-
 from fichas.serializers import FichaAcidenteTransitoSerializer, FichaConstatacaoSubstanciaSerializer, FichaDocumentoscopiaSerializer, FichaLocalCrimeSerializer, FichaMaterialDiversoSerializer
 from usuarios.models import User
-
-# 1. IMPORTAÇÕES DE MODELOS
 from .models import Ocorrencia, ServicoPericial, UnidadeDemandante, Autoridade, Cidade, ClassificacaoOcorrencia, ProcedimentoCadastrado, TipoDocumento, Exame
-
-# 2. IMPORTAÇÕES DE OUTROS SERIALIZERS
 from servicos_periciais.serializers import ServicoPericialSerializer
 from unidades_demandantes.serializers import UnidadeDemandanteSerializer
 from autoridades.serializers import AutoridadeSerializer
@@ -23,6 +18,7 @@ from usuarios.serializers import UserNestedSerializer
 
 
 class OcorrenciaListSerializer(serializers.ModelSerializer):
+    # ... (código sem alteração)
     status_prazo = serializers.SerializerMethodField()
     dias_prazo = serializers.SerializerMethodField()
     servico_pericial = ServicoPericialSerializer(read_only=True)
@@ -56,10 +52,7 @@ class OcorrenciaListSerializer(serializers.ModelSerializer):
 
 
 class OcorrenciaDetailSerializer(serializers.ModelSerializer):
-    """
-    Serializer para a visualização de DETALHES de uma ocorrência.
-    """
-    # --- Campos aninhados para leitura ---
+    # ... (código sem alteração)
     servico_pericial = ServicoPericialSerializer(read_only=True)
     unidade_demandante = UnidadeDemandanteSerializer(read_only=True)
     autoridade = AutoridadeSerializer(read_only=True)
@@ -73,8 +66,6 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
     exames_solicitados = ExameNestedSerializer(many=True, read_only=True)
     finalizada_por = UserNestedSerializer(read_only=True)
     reaberta_por = UserNestedSerializer(read_only=True)
-
-    # --- CORREÇÃO: ADICIONA AS FICHAS PARA EXIBIÇÃO ---
     ficha_local_crime = FichaLocalCrimeSerializer(read_only=True)
     ficha_acidente_transito = FichaAcidenteTransitoSerializer(read_only=True)
     ficha_constatacao_substancia = FichaConstatacaoSubstanciaSerializer(read_only=True)
@@ -83,7 +74,6 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Ocorrencia
-        # Adiciona os nomes das fichas à lista de fields
         fields = [
             'id', 'numero_ocorrencia', 'status',
             'servico_pericial', 'unidade_demandante', 'autoridade', 
@@ -96,7 +86,6 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
             'data_finalizacao', 'data_assinatura_finalizacao', 'ip_assinatura_finalizacao',
             'data_reabertura', 'motivo_reabertura', 'ip_reabertura',
             'created_at', 'updated_at',
-            # Nomes dos campos de ficha
             'ficha_local_crime', 'ficha_acidente_transito',
             'ficha_constatacao_substancia', 'ficha_documentoscopia',
             'ficha_material_diverso'
@@ -106,13 +95,11 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         user = request.user if request and hasattr(request, 'user') else None
         
-        # Só aplica filtro se o campo existir (para não quebrar quando usado só para leitura)
         if user and not user.is_superuser and 'servico_pericial_id' in self.fields:
             servicos_do_usuario = user.servicos_periciais.all()
             self.fields['servico_pericial_id'].queryset = servicos_do_usuario
 
     def validate(self, data):
-        # Validação na CRIAÇÃO - só executa se tem dados de escrita
         if not self.instance and data:
             user = self.context['request'].user
             servico_pericial = data.get('servico_pericial')
@@ -122,8 +109,7 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
 
 
 class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
-    """Serializer focado APENAS na EDIÇÃO de uma ocorrência."""
-    
+    # ... (código sem alteração)
     perito_atribuido_id = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.filter(perfil='PERITO'), 
         source='perito_atribuido', 
@@ -143,7 +129,7 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         label="Procedimento"
     )
     classificacao_id = serializers.PrimaryKeyRelatedField(
-        queryset=ClassificacaoOcorrencia.objects.all(),
+        queryset=ClassificacaoOcorrencia.objects.all(), # Mantém all() para a validação inicial
         source='classificacao',
         required=False,
         label="Classificação"
@@ -166,8 +152,6 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         required=False,
         label="Cidade"
     )
-    
-    # Campo para exames
     exames_ids = serializers.ListField(
         child=serializers.IntegerField(),
         required=False,
@@ -175,41 +159,26 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         write_only=True,
         help_text="Lista de IDs dos exames (substitui todos os existentes)"
     )
-    
-    # Para mostrar exames atuais na resposta
     exames_solicitados = ExameNestedSerializer(many=True, read_only=True)
 
     class Meta:
         model = Ocorrencia
         fields = [
-            'classificacao_id',
-            'unidade_demandante_id',
-            'autoridade_id',
-            'cidade_id',
-            'historico', 
-            'processo_sei_numero', 
-            'numero_documento_origem', 
-            'data_documento_origem',
-            'tipo_documento_origem_id', 
-            'procedimento_cadastrado_id', 
-            'perito_atribuido_id',
-            'exames_ids', 
-            'exames_solicitados'
+            'classificacao_id', 'unidade_demandante_id', 'autoridade_id',
+            'cidade_id', 'historico', 'processo_sei_numero', 
+            'numero_documento_origem', 'data_documento_origem',
+            'tipo_documento_origem_id', 'procedimento_cadastrado_id', 
+            'perito_atribuido_id', 'exames_ids', 'exames_solicitados'
         ]
 
-    # ... resto dos métodos validate_exames_ids, validate e update permanecem iguais
     def validate_exames_ids(self, value):
-        """Valida se os exames existem"""
         if not value:
             return value
-        
         from exames.models import Exame
         existing_ids = list(Exame.objects.filter(id__in=value).values_list('id', flat=True))
         invalid_ids = set(value) - set(existing_ids)
-        
         if invalid_ids:
             raise serializers.ValidationError(f"Exames inválidos: {list(invalid_ids)}")
-        
         return value
 
     def validate(self, data):
@@ -217,16 +186,21 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         user = request.user
         
+        # --- INÍCIO DA CORREÇÃO ---
+        classificacao = data.get('classificacao')
+        if classificacao and classificacao.subgrupos.exists():
+            raise serializers.ValidationError(
+                f'A classificação "{classificacao.nome}" é um Grupo Principal. Por favor, selecione um subgrupo específico.'
+            )
+        # --- FIM DA CORREÇÃO ---
+
         if instance.esta_finalizada and not user.is_superuser:
             raise serializers.ValidationError("Esta ocorrência está finalizada e não pode ser editada.")
         
-        # Verificar permissão para alterar exames
         if 'exames_ids' in data:
             if instance.perito_atribuido:
                 if not user.is_superuser and user.id != instance.perito_atribuido.id:
-                    raise serializers.ValidationError({
-                        "exames_ids": "Apenas o perito atribuído pode alterar os exames desta ocorrência."
-                    })
+                    raise serializers.ValidationError({"exames_ids": "Apenas o perito atribuído pode alterar os exames desta ocorrência."})
             
         if not user.is_superuser:
             if instance.perito_atribuido and 'perito_atribuido' in data and instance.perito_atribuido != data.get('perito_atribuido'):
@@ -241,36 +215,25 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         return data
 
     def update(self, instance, validated_data):
-    # VALIDAÇÃO: Bloquear alteração de procedimento vinculado
         if 'procedimento_cadastrado' in validated_data:
             novo_procedimento = validated_data.get('procedimento_cadastrado')
             procedimento_atual = instance.procedimento_cadastrado
-            
-            # Se já tem procedimento e está tentando mudar/remover
             if procedimento_atual and novo_procedimento != procedimento_atual:
                 user = self.context['request'].user
                 if not user.is_superuser:
-                    raise serializers.ValidationError({
-                        'procedimento_cadastrado': 'Esta ocorrência já possui um procedimento vinculado. Use o endpoint /vincular_procedimento/ ou contate um administrador.'
-                    })
+                    raise serializers.ValidationError({'procedimento_cadastrado': 'Esta ocorrência já possui um procedimento vinculado. Use o endpoint /vincular_procedimento/ ou contate um administrador.'})
         
-        # Extrai exames antes do update
         exames_ids = validated_data.pop('exames_ids', None)
-        
-        # Update normal dos outros campos
         for field, value in validated_data.items():
             setattr(instance, field, value)
-        
         instance.save()
-        
-        # Processa exames se fornecidos
         if exames_ids is not None:
             instance.exames_solicitados.set(exames_ids)
-        
         return instance
 
 
 class FinalizarComAssinaturaSerializer(serializers.Serializer):
+    # ... (código sem alteração)
     password = serializers.CharField(write_only=True, style={'input_type': 'password'}, label="Senha", help_text="Confirme sua senha para assinatura digital")
     
     def validate(self, attrs):
@@ -282,6 +245,7 @@ class FinalizarComAssinaturaSerializer(serializers.Serializer):
 
 
 class ReabrirOcorrenciaSerializer(serializers.Serializer):
+    # ... (código sem alteração)
     password = serializers.CharField(write_only=True, style={'input_type': 'password'}, label="Senha", help_text="Confirme sua senha")
     motivo_reabertura = serializers.CharField(max_length=1000, label="Motivo da Reabertura")
     
@@ -296,22 +260,19 @@ class ReabrirOcorrenciaSerializer(serializers.Serializer):
 
 
 class OcorrenciaLixeiraSerializer(serializers.ModelSerializer):
+    # ... (código sem alteração)
     servico_pericial = ServicoPericialSerializer(read_only=True)
     unidade_demandante = UnidadeDemandanteSerializer(read_only=True)
     deleted_by = UserNestedSerializer(read_only=True)
 
     class Meta:
         model = Ocorrencia
-        fields = [
-            'id', 'numero_ocorrencia', 'servico_pericial', 
-            'unidade_demandante', 'deleted_at', 'deleted_by'
-        ]
+        fields = ['id', 'numero_ocorrencia', 'servico_pericial', 'unidade_demandante', 'deleted_at', 'deleted_by']
         read_only_fields = ['deleted_at', 'deleted_by']
 
 
 class OcorrenciaDisplaySerializer(serializers.ModelSerializer):
-    """Serializer limpo para exibição ao usuário"""
-    
+    # ... (código sem alteração)
     servico_pericial = serializers.CharField(source='servico_pericial.nome', read_only=True)
     unidade_demandante = serializers.CharField(source='unidade_demandante.nome', read_only=True)
     autoridade = serializers.CharField(source='autoridade.nome', read_only=True)
@@ -340,7 +301,7 @@ class OcorrenciaDisplaySerializer(serializers.ModelSerializer):
 
 
 class OcorrenciaCreateSerializer(serializers.ModelSerializer):
-    """Serializer APENAS para CRIAÇÃO de ocorrências."""
+    # ... (outros campos sem alteração)
     servico_pericial_id = serializers.PrimaryKeyRelatedField(
         queryset=ServicoPericial.objects.all(), source='servico_pericial', label="Serviço Pericial")
     unidade_demandante_id = serializers.PrimaryKeyRelatedField(
@@ -349,7 +310,10 @@ class OcorrenciaCreateSerializer(serializers.ModelSerializer):
     cidade_id = serializers.PrimaryKeyRelatedField(
         queryset=Cidade.objects.all(), source='cidade', label="Cidade")
     classificacao_id = serializers.PrimaryKeyRelatedField(
-        queryset=ClassificacaoOcorrencia.objects.all(), source='classificacao', label="Classificação")
+        queryset=ClassificacaoOcorrencia.objects.all(), # Mantém all() para a validação inicial
+        source='classificacao', 
+        label="Classificação"
+    )
     procedimento_cadastrado_id = serializers.PrimaryKeyRelatedField(
         queryset=ProcedimentoCadastrado.objects.all(), source='procedimento_cadastrado', required=False, allow_null=True, label="Procedimento")
     tipo_documento_origem_id = serializers.PrimaryKeyRelatedField(
@@ -378,31 +342,31 @@ class OcorrenciaCreateSerializer(serializers.ModelSerializer):
     def validate_exames_ids(self, value):
         if not value:
             return value
-        
         from exames.models import Exame
         existing_ids = list(Exame.objects.filter(id__in=value).values_list('id', flat=True))
         invalid_ids = set(value) - set(existing_ids)
-        
         if invalid_ids:
             raise serializers.ValidationError(f"Exames inválidos: {list(invalid_ids)}")
-        
         return value
 
     def validate(self, data):
         user = self.context['request'].user
+        
+        # --- INÍCIO DA CORREÇÃO ---
+        classificacao = data.get('classificacao')
+        if classificacao and classificacao.subgrupos.exists():
+            raise serializers.ValidationError(
+                f'A classificação "{classificacao.nome}" é um Grupo Principal. Por favor, selecione um subgrupo específico.'
+            )
+        # --- FIM DA CORREÇÃO ---
+
         if not user.servicos_periciais.filter(pk=data.get('servico_pericial').pk).exists() and not user.is_superuser:
             raise serializers.ValidationError({"servico_pericial_id": "Você não tem permissão para registrar ocorrências neste serviço pericial."})
         return data
 
     def create(self, validated_data):
-        # Extrai os exames antes de criar
         exames_ids = validated_data.pop('exames_ids', [])
-        
-        # Cria a ocorrência
         ocorrencia = Ocorrencia.objects.create(**validated_data)
-        
-        # Vincula os exames
         if exames_ids:
             ocorrencia.exames_solicitados.set(exames_ids)
-        
         return ocorrencia

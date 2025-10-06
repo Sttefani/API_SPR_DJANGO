@@ -1,8 +1,7 @@
-# classificacoes/serializers.py
-
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 from usuarios.serializers import UserNestedSerializer
+from servicos_periciais.models import ServicoPericial # <-- ADICIONADO
 from .models import ClassificacaoOcorrencia
 
 # -----------------------------------------------------------------------------
@@ -40,6 +39,18 @@ class ClassificacaoOcorrenciaSerializer(serializers.ModelSerializer):
         label='Grupo Pai'
     )
 
+    # --- INÍCIO DA MODIFICAÇÃO ---
+    # Campo para exibir os serviços já associados (apenas leitura)
+    servicos_periciais = serializers.SerializerMethodField()
+
+    # Campo para receber a lista de IDs dos serviços ao salvar (apenas escrita)
+    servicos_periciais_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False # Permite não enviar a lista ou enviar uma lista vazia
+    )
+    # --- FIM DA MODIFICAÇÃO ---
+
     # Validações de campos únicos
     codigo = serializers.CharField(
         max_length=20,
@@ -64,6 +75,8 @@ class ClassificacaoOcorrenciaSerializer(serializers.ModelSerializer):
             'nome',
             'parent',
             'parent_id',
+            'servicos_periciais', # <-- ADICIONADO
+            'servicos_periciais_ids', # <-- ADICIONADO
             'created_at',
             'updated_at',
             'created_by',
@@ -75,6 +88,30 @@ class ClassificacaoOcorrenciaSerializer(serializers.ModelSerializer):
             'created_by',
             'updated_by'
         ]
+
+    # --- INÍCIO DAS NOVAS FUNÇÕES ---
+    def get_servicos_periciais(self, obj):
+        # Retorna uma lista de dicionários simples para o frontend consumir facilmente
+        return obj.servicos_periciais.values('id', 'sigla', 'nome')
+
+    def create(self, validated_data):
+        # Remove a lista de IDs antes de chamar o 'create' do pai
+        servicos_ids = validated_data.pop('servicos_periciais_ids', [])
+        classificacao = super().create(validated_data)
+        # Se a lista de IDs foi enviada, estabelece a relação ManyToMany
+        if servicos_ids:
+            classificacao.servicos_periciais.set(servicos_ids)
+        return classificacao
+
+    def update(self, instance, validated_data):
+        # Remove a lista de IDs antes de chamar o 'update' do pai
+        servicos_ids = validated_data.pop('servicos_periciais_ids', None)
+        classificacao = super().update(instance, validated_data)
+        # Se a lista de IDs foi enviada (mesmo que vazia), atualiza a relação
+        if servicos_ids is not None:
+            classificacao.servicos_periciais.set(servicos_ids)
+        return classificacao
+    # --- FIM DAS NOVAS FUNÇÕES ---
 
 # -----------------------------------------------------------------------------
 # SERIALIZER DA LIXEIRA

@@ -2,7 +2,8 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
-from django.db.models import Q, Count, F, Case, When
+from django.db.models import Q, Count, F, Case, When, Value
+from django.db.models.functions import Coalesce
 from datetime import timedelta, datetime
 from servicos_periciais.models import ServicoPericial
 from usuarios.models import User
@@ -114,56 +115,45 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         except (ValueError, TypeError):
             return Response({'error': 'Formato de filtro inválido.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Relatório 1: Agrupado pelo Grupo Pai da Classificação
         por_grupo_principal = queryset.annotate(
-            grupo_nome=Case(
-                When(classificacao__parent__isnull=False, then=F('classificacao__parent__nome')),
-                default=F('classificacao__nome')
-            )
-        ).values('grupo_nome').annotate(total=Count('id')).order_by('-total')
+            grupo_nome=Case(When(classificacao__parent__isnull=False, then=F('classificacao__parent__nome')), default=F('classificacao__nome')),
+            grupo_codigo=Case(When(classificacao__parent__isnull=False, then=F('classificacao__parent__codigo')), default=F('classificacao__codigo'))
+        ).values('grupo_nome', 'grupo_codigo').annotate(total=Count('id')).order_by('grupo_codigo')
 
-        # Relatório 2: Agrupado por cada Classificação Específica (código e subcódigo)
-        por_classificacao_especifica = queryset.values(
-            'classificacao__codigo', 'classificacao__nome'
-        ).annotate(total=Count('id')).order_by('classificacao__codigo')
+        por_classificacao_especifica = queryset.filter(classificacao__parent__isnull=False).values('classificacao__codigo', 'classificacao__nome').annotate(total=Count('id')).order_by('classificacao__codigo')
 
-        # Relatório 3: Produção por Perito
         peritos_queryset = User.objects.filter(perfil='PERITO', status='ATIVO')
         if perito_id:
             peritos_queryset = peritos_queryset.filter(id=perito_id)
         por_perito = peritos_queryset.annotate(
-            total_ocorrencias=Count('ocorrencias_atribuidas', filter=Q(ocorrencias_atribuidas__in=queryset)),
-            finalizadas=Count('ocorrencias_atribuidas', filter=Q(ocorrencias_atribuidas__in=queryset, ocorrencias_atribuidas__status='FINALIZADA')),
-            em_analise=Count('ocorrencias_atribuidas', filter=Q(ocorrencias_atribuidas__in=queryset, ocorrencias_atribuidas__status='EM_ANALISE'))
+            total_ocorrencias=Coalesce(Count('ocorrencias_atribuidas', filter=Q(ocorrencias_atribuidas__in=queryset)), 0),
+            finalizadas=Coalesce(Count('ocorrencias_atribuidas', filter=Q(ocorrencias_atribuidas__in=queryset, ocorrencias_atribuidas__status='FINALIZADA')), 0),
+            em_analise=Coalesce(Count('ocorrencias_atribuidas', filter=Q(ocorrencias_atribuidas__in=queryset, ocorrencias_atribuidas__status='EM_ANALISE')), 0)
         ).values('nome_completo', 'total_ocorrencias', 'finalizadas', 'em_analise').order_by('-total_ocorrencias')
+
+        por_servico = queryset.values('servico_pericial__sigla', 'servico_pericial__nome').annotate(
+            total=Coalesce(Count('id'), 0),
+            finalizadas=Coalesce(Count('id', filter=Q(status='FINALIZADA')), 0),
+            em_analise=Coalesce(Count('id', filter=Q(status='EM_ANALISE')), 0)
+        ).order_by('-total')
 
         return Response({
             'por_grupo_principal': list(por_grupo_principal),
             'por_classificacao_especifica': list(por_classificacao_especifica),
             'producao_por_perito': list(por_perito),
+            'por_servico': list(por_servico)
         })
     
-    # ... (o resto do seu arquivo, sem nenhuma outra alteração)
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
     
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
     
-    def update(self, request, *args, **kwargs):
-        partial = kwargs.pop('partial', False)
-        instance = self.get_object()
-        serializer = self.get_serializer(instance, data=request.data, partial=partial)
-        serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
-        
-    # ← IMPORTANTE: Retorna com OcorrenciaDetailSerializer que tem todos os campos
-        return Response(OcorrenciaDetailSerializer(instance, context={'request': request}).data)
-    
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         instance.soft_delete(user=self.request.user)
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(status=status.HTTP_400_NO_CONTENT)
     
     @action(detail=False, methods=['get'])
     def lixeira(self, request):
