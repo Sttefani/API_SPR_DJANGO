@@ -605,3 +605,214 @@ def gerar_pdf_relatorio_geral(request):
     buffer.seek(0)
     filename = f"RELATORIO_GERAL-{timezone.now().strftime('%Y%m%d_%H%M')}.pdf"
     return FileResponse(buffer, as_attachment=True, filename=filename)
+
+def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
+    """Gera PDF dos relatórios gerenciais com os dados filtrados"""
+    from reportlab.lib.pagesizes import landscape
+    
+    buffer = io.BytesIO()
+    
+    usuario_emissor = request.user.nome_completo if request.user.is_authenticated else "Sistema"
+    data_emissao = timezone.now().strftime('%d/%m/%Y às %H:%M:%S')
+
+    def footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont('Helvetica', 8)
+        canvas.line(doc.leftMargin, doc.bottomMargin - 0.5*cm, doc.width + doc.leftMargin, doc.bottomMargin - 0.5*cm)
+        canvas.drawString(doc.leftMargin, doc.bottomMargin - 1*cm, f"Relatório emitido por: {usuario_emissor}")
+        canvas.drawString(doc.leftMargin, doc.bottomMargin - 1.5*cm, f"Data da Emissão: {data_emissao}")
+        canvas.drawRightString(doc.width + doc.leftMargin, doc.bottomMargin - 1.5*cm, f"Página {doc.page}")
+        canvas.restoreState()
+
+    doc = SimpleDocTemplate(
+        buffer, 
+        pagesize=landscape(A4), 
+        rightMargin=1.5*cm, 
+        leftMargin=1.5*cm, 
+        topMargin=1.5*cm, 
+        bottomMargin=2.5*cm
+    )
+    
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name='Titulo', fontSize=14, fontName='Helvetica-Bold', alignment=TA_CENTER, spaceAfter=10))
+    styles.add(ParagraphStyle(name='Subtitulo', fontSize=11, fontName='Helvetica-Bold', spaceBefore=8, spaceAfter=4, textColor=colors.HexColor('#2c3e50')))
+    styles.add(ParagraphStyle(name='NormalCompacto', parent=styles['Normal'], leading=14, spaceAfter=2, fontSize=9))
+    styles.add(ParagraphStyle(name='FiltroInfo', parent=styles['Normal'], fontSize=8, textColor=colors.HexColor('#4a5568'), spaceAfter=4))
+
+    story = []
+    
+    def add_linha(chave, valor):
+        if valor not in [None, '']:
+            p_text = f"<b>{chave}:</b> {str(valor)}"
+            story.append(Paragraph(p_text, styles['FiltroInfo']))
+
+    # CABEÇALHO
+    story.append(Paragraph("RELATÓRIO GERENCIAL DE OCORRÊNCIAS", styles['Titulo']))
+    story.append(Paragraph("Análise de Dados e Estatísticas Agregadas", styles['NormalCompacto']))
+    story.append(Spacer(1, 0.3*cm))
+    
+    # FILTROS APLICADOS
+    if filtros:
+        story.append(Paragraph("Filtros Aplicados:", styles['Subtitulo']))
+        if filtros.get('data_inicio'):
+            add_linha("Data Início", filtros['data_inicio'])
+        if filtros.get('data_fim'):
+            add_linha("Data Fim", filtros['data_fim'])
+        if filtros.get('servico_nome'):
+            add_linha("Serviço", filtros['servico_nome'])
+        if filtros.get('cidade_nome'):
+            add_linha("Cidade", filtros['cidade_nome'])
+        if filtros.get('perito_nome'):
+            add_linha("Perito", filtros['perito_nome'])
+        if filtros.get('classificacao_nome'):
+            add_linha("Classificação", filtros['classificacao_nome'])
+        story.append(Spacer(1, 0.5*cm))
+    
+    # TABELA 1: GRUPO PRINCIPAL
+    if dados.get('por_grupo_principal') and len(dados['por_grupo_principal']) > 0:
+        story.append(Paragraph("Ocorrências por Grupo Principal", styles['Subtitulo']))
+        
+        table_data = [['Código', 'Grupo', 'Total']]
+        for item in dados['por_grupo_principal']:
+            table_data.append([
+                str(item.get('grupo_codigo', '-')),
+                str(item.get('grupo_nome', '-')),
+                str(item.get('total', 0))
+            ])
+        
+        col_widths = [3*cm, 15*cm, 3*cm]
+        table = Table(table_data, colWidths=col_widths)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a8a')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (2, 0), (2, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('TOPPADDING', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+            ('TOPPADDING', (0, 1), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#cbd5e0')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f7fafc')])
+        ]))
+        
+        story.append(table)
+        story.append(Spacer(1, 0.7*cm))
+    
+    # TABELA 2: CLASSIFICAÇÃO ESPECÍFICA
+    if dados.get('por_classificacao_especifica') and len(dados['por_classificacao_especifica']) > 0:
+        story.append(Paragraph("Ocorrências por Classificação Específica (Subgrupos)", styles['Subtitulo']))
+        
+        table_data = [['Código', 'Nome', 'Total']]
+        for item in dados['por_classificacao_especifica']:
+            table_data.append([
+                str(item.get('classificacao__codigo', '-')),
+                str(item.get('classificacao__nome', '-')),
+                str(item.get('total', 0))
+            ])
+        
+        col_widths = [3*cm, 15*cm, 3*cm]
+        table = Table(table_data, colWidths=col_widths)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a8a')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (2, 0), (2, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('TOPPADDING', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+            ('TOPPADDING', (0, 1), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#cbd5e0')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f7fafc')])
+        ]))
+        
+        story.append(table)
+        story.append(Spacer(1, 0.7*cm))
+    
+    # TABELA 3: PRODUÇÃO POR PERITO
+    if dados.get('producao_por_perito') and len(dados['producao_por_perito']) > 0:
+        story.append(Paragraph("Produção por Perito", styles['Subtitulo']))
+        
+        table_data = [['Perito', 'Total Atribuído', 'Finalizadas', 'Em Análise']]
+        for item in dados['producao_por_perito']:
+            table_data.append([
+                str(item.get('nome_completo', '-')),
+                str(item.get('total_ocorrencias', 0)),
+                str(item.get('finalizadas', 0)),
+                str(item.get('em_analise', 0))
+            ])
+        
+        col_widths = [10*cm, 3*cm, 3*cm, 3*cm]
+        table = Table(table_data, colWidths=col_widths)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a8a')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('TOPPADDING', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+            ('TOPPADDING', (0, 1), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#cbd5e0')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f7fafc')])
+        ]))
+        
+        story.append(table)
+        story.append(Spacer(1, 0.7*cm))
+    
+    # TABELA 4: PRODUÇÃO POR SERVIÇO
+    if dados.get('por_servico') and len(dados['por_servico']) > 0:
+        story.append(Paragraph("Produção por Serviço Pericial", styles['Subtitulo']))
+        
+        table_data = [['Serviço', 'Total', 'Finalizadas', 'Em Análise']]
+        for item in dados['por_servico']:
+            sigla = item.get('servico_pericial__sigla', '-')
+            nome = item.get('servico_pericial__nome', '-')
+            servico_completo = f"{sigla} - {nome}" if sigla != '-' else nome
+            
+            table_data.append([
+                servico_completo,
+                str(item.get('total', 0)),
+                str(item.get('finalizadas', 0)),
+                str(item.get('em_analise', 0))
+            ])
+        
+        col_widths = [10*cm, 3*cm, 3*cm, 3*cm]
+        table = Table(table_data, colWidths=col_widths)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a8a')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('TOPPADDING', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+            ('TOPPADDING', (0, 1), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#cbd5e0')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f7fafc')])
+        ]))
+        
+        story.append(table)
+    
+    # Rodapé
+    story.append(Spacer(1, 1*cm))
+    rodape_style = ParagraphStyle('RodapeStyle', parent=styles['Normal'], fontSize=8, textColor=colors.HexColor('#6b7280'), alignment=TA_CENTER)
+    story.append(Paragraph("© 2025 - Desenvolvido por: Perito Criminal Sttefani Ribeiro | Versão 1.0.1", rodape_style))
+    
+    # Construir PDF
+    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    
+    buffer.seek(0)
+    filename = f"RELATORIO_GERENCIAL_{timezone.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    return FileResponse(buffer, as_attachment=True, filename=filename)

@@ -22,6 +22,7 @@ from exames.views import ExameViewSet
 from procedimentos_cadastrados.views import ProcedimentoCadastradoViewSet
 from tipos_documento.views import TipoDocumentoViewSet
 from ocorrencias.views import OcorrenciaViewSet
+from ocorrencias.views_relatorios import RelatoriosGerenciaisViewSet
 from fichas.views import (
     FichaLocalCrimeViewSet, VitimaViewSet, VestigioViewSet, LacreViewSet,
     FichaAcidenteTransitoViewSet, VeiculoViewSet,
@@ -47,6 +48,7 @@ router.register(r'exames', ExameViewSet)
 router.register(r'procedimentos-cadastrados', ProcedimentoCadastradoViewSet)
 router.register(r'tipos-documento', TipoDocumentoViewSet)
 router.register(r'ocorrencias', OcorrenciaViewSet)
+router.register(r'relatorios-gerenciais', RelatoriosGerenciaisViewSet, basename='relatorios-gerenciais')
 router.register(r'registrar', UserRegistrationViewSet, basename='user-registration')
 
 

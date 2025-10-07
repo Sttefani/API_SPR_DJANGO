@@ -3,15 +3,31 @@
 from rest_framework import serializers
 from django.utils import timezone
 import datetime
-from fichas.serializers import FichaAcidenteTransitoSerializer, FichaConstatacaoSubstanciaSerializer, FichaDocumentoscopiaSerializer, FichaLocalCrimeSerializer, FichaMaterialDiversoSerializer
+from fichas.serializers import (
+    FichaAcidenteTransitoSerializer,
+    FichaConstatacaoSubstanciaSerializer,
+    FichaDocumentoscopiaSerializer,
+    FichaLocalCrimeSerializer,
+    FichaMaterialDiversoSerializer,
+)
 from usuarios.models import User
-from .models import Ocorrencia, ServicoPericial, UnidadeDemandante, Autoridade, Cidade, ClassificacaoOcorrencia, ProcedimentoCadastrado, TipoDocumento, Exame
+from .models import (
+    Ocorrencia,
+    ServicoPericial,
+    UnidadeDemandante,
+    Autoridade,
+    Cidade,
+    ClassificacaoOcorrencia,
+    ProcedimentoCadastrado,
+    TipoDocumento)
 from servicos_periciais.serializers import ServicoPericialSerializer
 from unidades_demandantes.serializers import UnidadeDemandanteSerializer
 from autoridades.serializers import AutoridadeSerializer
 from cidades.serializers import CidadeSerializer
 from classificacoes.serializers import ClassificacaoOcorrenciaSerializer
-from procedimentos_cadastrados.serializers import ProcedimentoCadastradoSerializer
+from procedimentos_cadastrados.serializers import (
+    ProcedimentoCadastradoSerializer,
+)
 from tipos_documento.serializers import TipoDocumentoSerializer
 from exames.serializers import ExameNestedSerializer
 from usuarios.serializers import UserNestedSerializer
@@ -37,11 +53,15 @@ class OcorrenciaListSerializer(serializers.ModelSerializer):
         ]
 
     def get_status_prazo(self, obj):
-        if obj.data_finalizacao: return 'CONCLUIDO'
+        if obj.data_finalizacao:
+            return 'CONCLUIDO'
         dias_corridos = (timezone.now().date() - obj.created_at.date()).days
-        if dias_corridos <= 10: return 'NO_PRAZO'
-        elif dias_corridos <= 20: return 'PRORROGADO'
-        else: return 'ATRASADO'
+        if dias_corridos <= 10:
+            return 'NO_PRAZO'
+        elif dias_corridos <= 20:
+            return 'PRORROGADO'
+        else:
+            return 'ATRASADO'
 
     def get_dias_prazo(self, obj):
         if obj.data_finalizacao:
@@ -76,26 +96,33 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
         model = Ocorrencia
         fields = [
             'id', 'numero_ocorrencia', 'status',
-            'servico_pericial', 'unidade_demandante', 'autoridade', 
-            'cidade', 'classificacao', 'procedimento_cadastrado', 
-            'tipo_documento_origem', 'perito_atribuido', 
-            'exames_solicitados', 'created_by', 'updated_by', 
+            'servico_pericial', 'unidade_demandante', 'autoridade',
+            'cidade', 'classificacao', 'procedimento_cadastrado',
+            'tipo_documento_origem', 'perito_atribuido',
+            'exames_solicitados', 'created_by', 'updated_by',
             'finalizada_por', 'reaberta_por',
             'data_fato', 'hora_fato', 'historico', 'historico_ultima_edicao',
-            'numero_documento_origem', 'data_documento_origem', 'processo_sei_numero',
-            'data_finalizacao', 'data_assinatura_finalizacao', 'ip_assinatura_finalizacao',
+            'numero_documento_origem',
+            'data_documento_origem',
+            'processo_sei_numero',
+            'data_finalizacao', 'data_assinatura_finalizacao', 
+            'ip_assinatura_finalizacao',
             'data_reabertura', 'motivo_reabertura', 'ip_reabertura',
             'created_at', 'updated_at',
             'ficha_local_crime', 'ficha_acidente_transito',
             'ficha_constatacao_substancia', 'ficha_documentoscopia',
             'ficha_material_diverso'
         ]
+        
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
         user = request.user if request and hasattr(request, 'user') else None
         
-        if user and not user.is_superuser and 'servico_pericial_id' in self.fields:
+        if (
+            user and not user.is_superuser 
+            and 'servico_pericial_id' in self.fields
+        ):
             servicos_do_usuario = user.servicos_periciais.all()
             self.fields['servico_pericial_id'].queryset = servicos_do_usuario
 
@@ -103,8 +130,17 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
         if not self.instance and data:
             user = self.context['request'].user
             servico_pericial = data.get('servico_pericial')
-            if servico_pericial and not user.servicos_periciais.filter(pk=servico_pericial.pk).exists() and not user.is_superuser:
-                raise serializers.ValidationError({"servico_pericial_id": "Você não tem permissão para registrar ocorrências neste serviço pericial."})
+            if (
+                servico_pericial 
+                and not user.servicos_periciais.filter(pk=servico_pericial.pk).exists() 
+                and not user.is_superuser
+            ):
+                raise serializers.ValidationError({
+                    "servico_pericial_id": (
+                        "Você não tem permissão para registrar ocorrências "
+                        "neste serviço pericial."
+                    )
+                })
         return data
 
 
@@ -129,7 +165,7 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         label="Procedimento"
     )
     classificacao_id = serializers.PrimaryKeyRelatedField(
-        queryset=ClassificacaoOcorrencia.objects.all(), # Mantém all() para a validação inicial
+        queryset=ClassificacaoOcorrencia.objects.all(),
         source='classificacao',
         required=False,
         label="Classificação"
@@ -178,7 +214,9 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         existing_ids = list(Exame.objects.filter(id__in=value).values_list('id', flat=True))
         invalid_ids = set(value) - set(existing_ids)
         if invalid_ids:
-            raise serializers.ValidationError(f"Exames inválidos: {list(invalid_ids)}")
+            raise serializers.ValidationError(
+                f"Exames inválidos: {list(invalid_ids)}"
+            )
         return value
 
     def validate(self, data):
@@ -195,19 +233,43 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         # --- FIM DA CORREÇÃO ---
 
         if instance.esta_finalizada and not user.is_superuser:
-            raise serializers.ValidationError("Esta ocorrência está finalizada e não pode ser editada.")
+            raise serializers.ValidationError(
+                "Esta ocorrência está finalizada e não pode ser editada."
+            )
         
         if 'exames_ids' in data:
             if instance.perito_atribuido:
-                if not user.is_superuser and user.id != instance.perito_atribuido.id:
-                    raise serializers.ValidationError({"exames_ids": "Apenas o perito atribuído pode alterar os exames desta ocorrência."})
+                if (
+                    not user.is_superuser
+                    and user.id != instance.perito_atribuido.id
+                ):
+                    raise serializers.ValidationError({
+                        "exames_ids": (
+                            "Apenas o perito atribuído pode alterar os exames "
+                            "desta ocorrência."
+                        )
+                    })
             
         if not user.is_superuser:
-            if instance.perito_atribuido and 'perito_atribuido' in data and instance.perito_atribuido != data.get('perito_atribuido'):
-                raise serializers.ValidationError("Apenas um Super Admin pode alterar um perito já atribuído.")
+            if (
+                instance.perito_atribuido 
+                and 'perito_atribuido' in data 
+                and instance.perito_atribuido != data.get('perito_atribuido')
+            ):
+                raise serializers.ValidationError(
+                    (
+                        "Apenas um Super Admin pode alterar um perito já "
+                        "atribuído."
+                    )
+                    )
 
-            if 'historico' in data and data.get('historico') != instance.historico:
-                data_base_prazo = instance.historico_ultima_edicao or instance.created_at
+            if (
+                'historico' in data 
+                and data.get('historico') != instance.historico
+            ):
+                data_base_prazo = (
+                    instance.historico_ultima_edicao or instance.created_at
+                )
                 if data_base_prazo:
                     prazo_edicao = data_base_prazo + datetime.timedelta(hours=72)
                     if timezone.now() > prazo_edicao:
@@ -221,7 +283,13 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
             if procedimento_atual and novo_procedimento != procedimento_atual:
                 user = self.context['request'].user
                 if not user.is_superuser:
-                    raise serializers.ValidationError({'procedimento_cadastrado': 'Esta ocorrência já possui um procedimento vinculado. Use o endpoint /vincular_procedimento/ ou contate um administrador.'})
+                    raise serializers.ValidationError({
+                        'procedimento_cadastrado': (
+                            'Esta ocorrência já possui um procedimento vinculado. '
+                            'Use o endpoint /vincular_procedimento/ ou '
+                            'contate um administrador.'
+                        )
+                    })
         
         exames_ids = validated_data.pop('exames_ids', None)
         for field, value in validated_data.items():
@@ -234,8 +302,15 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
 
 class FinalizarComAssinaturaSerializer(serializers.Serializer):
     # ... (código sem alteração)
-    password = serializers.CharField(write_only=True, style={'input_type': 'password'}, label="Senha", help_text="Confirme sua senha para assinatura digital")
-    
+    password = serializers.CharField(
+        write_only=True,
+        style={'input_type': 'password'},
+        label="Senha",
+        help_text=(
+            "Confirme sua senha para assinatura digital"
+        )
+    )
+   
     def validate(self, attrs):
         request = self.context.get('request')
         user = request.user
@@ -246,16 +321,28 @@ class FinalizarComAssinaturaSerializer(serializers.Serializer):
 
 class ReabrirOcorrenciaSerializer(serializers.Serializer):
     # ... (código sem alteração)
-    password = serializers.CharField(write_only=True, style={'input_type': 'password'}, label="Senha", help_text="Confirme sua senha")
-    motivo_reabertura = serializers.CharField(max_length=1000, label="Motivo da Reabertura")
-    
+    password = serializers.CharField(
+        write_only=True,
+        style={'input_type': 'password'},
+        label="Senha",
+        help_text="Confirme sua senha"
+    )
+    motivo_reabertura = serializers.CharField(
+        max_length=1000,
+        label="Motivo da Reabertura"
+    )
+
     def validate(self, attrs):
         request = self.context.get('request')
         user = request.user
         if not user.check_password(attrs.get('password')):
-            raise serializers.ValidationError({'password': 'Senha incorreta.'})
+            raise serializers.ValidationError(
+                {'password': 'Senha incorreta.'}
+            )
         if not attrs.get('motivo_reabertura', '').strip():
-            raise serializers.ValidationError({'motivo_reabertura': 'O motivo da reabertura é obrigatório.'})
+            raise serializers.ValidationError(
+                {'motivo_reabertura': 'O motivo da reabertura é obrigatório.'}
+            )
         return attrs
 
 
@@ -267,25 +354,48 @@ class OcorrenciaLixeiraSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Ocorrencia
-        fields = ['id', 'numero_ocorrencia', 'servico_pericial', 'unidade_demandante', 'deleted_at', 'deleted_by']
+        fields = [
+            'id', 'numero_ocorrencia', 'servico_pericial', 
+            'unidade_demandante', 'deleted_at', 'deleted_by'
+        ]
         read_only_fields = ['deleted_at', 'deleted_by']
 
 
 class OcorrenciaDisplaySerializer(serializers.ModelSerializer):
-    # ... (código sem alteração)
-    servico_pericial = serializers.CharField(source='servico_pericial.nome', read_only=True)
-    unidade_demandante = serializers.CharField(source='unidade_demandante.nome', read_only=True)
-    autoridade = serializers.CharField(source='autoridade.nome', read_only=True)
-    cidade = serializers.CharField(source='cidade.nome', read_only=True)
-    classificacao = serializers.CharField(source='classificacao.nome', read_only=True)
+    # Fields for displaying Ocorrencia details
+    servico_pericial = serializers.CharField(
+        source='servico_pericial.nome', read_only=True
+    )
+    unidade_demandante = serializers.CharField(
+        source='unidade_demandante.nome', read_only=True
+    )
+    autoridade = serializers.CharField(
+        source='autoridade.nome', read_only=True
+    )
+    cidade = serializers.CharField(
+        source='cidade.nome', read_only=True
+    )
+    classificacao = serializers.CharField(
+        source='classificacao.nome', read_only=True
+    )
     procedimento = serializers.SerializerMethodField()
-    tipo_documento = serializers.CharField(source='tipo_documento_origem.nome', read_only=True)
-    perito = serializers.CharField(source='perito_atribuido.nome_completo', read_only=True)
-    data_criacao = serializers.DateTimeField(source='created_at', read_only=True)
-    
+    tipo_documento = serializers.CharField(
+        source='tipo_documento_origem.nome', read_only=True
+    )
+    perito = serializers.CharField(
+        source='perito_atribuido.nome_completo', read_only=True
+    )
+    data_criacao = serializers.DateTimeField(
+        source='created_at', read_only=True
+    )
+
     def get_procedimento(self, obj):
         if obj.procedimento_cadastrado:
-            return f"{obj.procedimento_cadastrado.tipo_procedimento.sigla} - {obj.procedimento_cadastrado.numero}/{obj.procedimento_cadastrado.ano}"
+            return (
+                f"{obj.procedimento_cadastrado.tipo_procedimento.sigla} - "
+                f"{obj.procedimento_cadastrado.numero}/"
+                f"{obj.procedimento_cadastrado.ano}"
+            )
         return None
 
     class Meta:
