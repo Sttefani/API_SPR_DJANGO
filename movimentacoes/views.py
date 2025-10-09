@@ -1,6 +1,4 @@
-# movimentacoes/views.py
-
-from rest_framework import viewsets, mixins, status
+from rest_framework import viewsets, mixins, status  # ← ESTA LINHA
 from rest_framework.response import Response
 from rest_framework.decorators import action
 
@@ -9,7 +7,8 @@ from .serializers import MovimentacaoSerializer, CriarMovimentacaoSerializer
 from .permissions import MovimentacaoPermission
 from .filters import MovimentacaoFilter
 from ocorrencias.models import Ocorrencia
-from .pdf_generator import gerar_pdf_movimentacao, gerar_pdf_historico_movimentacoes  
+from .pdf_generator import gerar_pdf_movimentacao, gerar_pdf_historico_movimentacoes
+
 
 
 class MovimentacaoViewSet(
@@ -20,9 +19,6 @@ class MovimentacaoViewSet(
     mixins.ListModelMixin,
     viewsets.GenericViewSet
 ):
-    """
-    Endpoint para gerenciar o histórico de movimentações de uma ocorrência.
-    """
     queryset = Movimentacao.all_objects.all()
     permission_classes = [MovimentacaoPermission]
     filterset_class = MovimentacaoFilter
@@ -33,13 +29,9 @@ class MovimentacaoViewSet(
         return MovimentacaoSerializer
     
     def get_queryset(self):
-        # Filtra as movimentações para pertencerem apenas à ocorrência da URL
         return self.queryset.filter(ocorrencia_id=self.kwargs.get('ocorrencia_pk'))
     
     def create(self, request, *args, **kwargs):
-        """
-        Cria uma nova movimentação com assinatura.
-        """
         ocorrencia_id = self.kwargs.get('ocorrencia_pk')
         try:
             ocorrencia = Ocorrencia.objects.get(pk=ocorrencia_id)
@@ -52,16 +44,45 @@ class MovimentacaoViewSet(
         )
         
         serializer.is_valid(raise_exception=True)
-        movimentacao = serializer.save() # O método create do serializer já salva tudo
+        movimentacao = serializer.save()
         
-        # Retorna os dados usando o serializer de visualização
         response_serializer = MovimentacaoSerializer(movimentacao, context={'request': request})
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
-    def perform_update(self, serializer):
-        serializer.save(updated_by=self.request.user)
+    def update(self, request, *args, **kwargs):
+        """
+        Atualiza uma movimentação existente (requer assinatura)
+        """
+        instance = self.get_object()
+        
+        # Usa o serializer de criação que tem validação de assinatura
+        serializer = CriarMovimentacaoSerializer(
+            data=request.data,
+            context={
+                'request': request, 
+                'ocorrencia': instance.ocorrencia,
+                'movimentacao': instance  # ← PASSA PARA VALIDAÇÃO
+            }
+        )
+        
+        serializer.is_valid(raise_exception=True)
+        
+        # Atualiza os campos
+        instance.assunto = serializer.validated_data.get('assunto', instance.assunto)
+        instance.descricao = serializer.validated_data.get('descricao', instance.descricao)
+        instance.updated_by = request.user
+        instance.save()
+        
+        # Retorna usando o serializer de visualização
+        response_serializer = MovimentacaoSerializer(instance, context={'request': request})
+        return Response(response_serializer.data)
 
-    # --- LÓGICA DE DELEÇÃO E LIXEIRA ADICIONADA ---
+    def partial_update(self, request, *args, **kwargs):
+        """
+        PATCH também usa o mesmo fluxo de validação
+        """
+        return self.update(request, *args, **kwargs)
+
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         instance.soft_delete(user=request.user)
@@ -79,21 +100,14 @@ class MovimentacaoViewSet(
         instance.restore()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+        
     @action(detail=True, methods=['get'], url_path='pdf')
     def gerar_pdf(self, request, *args, **kwargs):
-        """
-        Gera PDF de uma movimentação específica.
-        GET /api/ocorrencias/{ocorrencia_pk}/movimentacoes/{id}/pdf/
-        """
         movimentacao = self.get_object()
         return gerar_pdf_movimentacao(movimentacao, request)
     
     @action(detail=False, methods=['get'], url_path='historico-pdf')
     def gerar_historico_pdf(self, request, *args, **kwargs):
-        """
-        Gera PDF com todas as movimentações da ocorrência.
-        GET /api/ocorrencias/{ocorrencia_pk}/movimentacoes/historico-pdf/
-        """
         ocorrencia_id = self.kwargs.get('ocorrencia_pk')
         try:
             ocorrencia = Ocorrencia.objects.get(pk=ocorrencia_id)
