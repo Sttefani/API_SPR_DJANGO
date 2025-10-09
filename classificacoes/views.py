@@ -49,8 +49,7 @@ class ClassificacaoOcorrenciaViewSet(viewsets.ModelViewSet):
         instance.restore()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
-    
-    # --- INÍCIO DA SEÇÃO MODIFICADA ---
+
     @action(detail=False, methods=['get'], pagination_class=None)
     def dropdown(self, request):
         queryset = ClassificacaoOcorrencia.objects.all().order_by('codigo')
@@ -73,11 +72,9 @@ class ClassificacaoOcorrenciaViewSet(viewsets.ModelViewSet):
                 Q(subgrupos__isnull=True) & 
                 (
                     Q(parent_id__in=grupos_pais_ids) |
-                    Q(servicos_periciais__id=servico_id) |
-                    Q(servicos_periciais__isnull=True)
+                    Q(servicos_periciais__id=servico_id)
                 )
             ).distinct()
 
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
-    # --- FIM DA SEÇÃO MODIFICADA ---

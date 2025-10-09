@@ -20,9 +20,6 @@ class MovimentacaoPermission(BasePermission):
             return None
 
     def has_permission(self, request, view):
-        """
-        Verifica a permissão para criar uma nova movimentação.
-        """
         user = request.user
         if not user or not user.is_authenticated:
             self.message = "Autenticação necessária."
@@ -32,6 +29,11 @@ class MovimentacaoPermission(BasePermission):
         if not ocorrencia:
             return False 
 
+        # ✅ CORREÇÃO: Permite listar (GET) mesmo sem perito
+        if request.method == 'GET':
+            return True  # Qualquer usuário autenticado pode ver a lista (mesmo vazia)
+
+        # ✅ CORREÇÃO: Só valida perito para CRIAR (POST)
         if not ocorrencia.perito_atribuido:
             self.message = "Não é possível adicionar movimentações a uma ocorrência sem perito atribuído."
             return False
@@ -41,7 +43,7 @@ class MovimentacaoPermission(BasePermission):
             return True
         
         if user.perfil == 'PERITO':
-            if user.id == ocorrencia.perito_atribuido.id:
+            if ocorrencia.perito_atribuido and user.id == ocorrencia.perito_atribuido.id:
                 return True
             else:
                 self.message = "Peritos só podem adicionar movimentações em ocorrências que lhes foram atribuídas."
@@ -78,7 +80,7 @@ class MovimentacaoPermission(BasePermission):
         
         # PERITO só pode editar movimentações das suas ocorrências.
         if user.perfil == 'PERITO':
-            if user.id == ocorrencia.perito_atribuido.id:
+            if ocorrencia.perito_atribuido and user.id == ocorrencia.perito_atribuido.id:
                 return True
             else:
                 self.message = "Peritos só podem editar movimentações de suas próprias ocorrências."

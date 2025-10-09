@@ -194,12 +194,26 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             'producao_por_perito': list(por_perito),
             'por_servico': por_servico_formatado
         })
+        
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ocorrencia = serializer.save(created_by=request.user)
+        
+        # Retorna com o serializer completo que tem numero_ocorrencia
+        response_serializer = OcorrenciaDetailSerializer(ocorrencia, context={'request': request})
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
-    def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
-
-    def perform_update(self, serializer):
-        serializer.save(updated_by=self.request.user)
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        ocorrencia = serializer.save(updated_by=request.user)
+        
+    # Retorna com o serializer completo que tem numero_ocorrencia
+        response_serializer = OcorrenciaDetailSerializer(ocorrencia, context={'request': request})
+        return Response(response_serializer.data)
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()

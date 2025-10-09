@@ -46,22 +46,57 @@ def gerar_pdf_ocorrencia(ocorrencia, request):
     add_linha("Número da Ocorrência", ocorrencia.numero_ocorrencia)
     add_linha("Status", ocorrencia.get_status_display())
     add_linha("Registrado em", ocorrencia.created_at.strftime('%d/%m/%Y às %H:%M'))
-    if ocorrencia.created_by: add_linha("Registrado por", ocorrencia.created_by.nome_completo)
+    if ocorrencia.created_by: 
+        add_linha("Registrado por", ocorrencia.created_by.nome_completo)
 
     story.append(Paragraph("1. DADOS GERAIS DA SOLICITAÇÃO", styles['Subtitulo']))
-    if ocorrencia.servico_pericial: add_linha("Serviço Pericial", ocorrencia.servico_pericial.nome)
-    if ocorrencia.unidade_demandante: add_linha("Unidade Demandante", ocorrencia.unidade_demandante.nome)
-    if ocorrencia.autoridade: add_linha("Autoridade Demandante", f"{ocorrencia.autoridade.nome} ({ocorrencia.autoridade.cargo.nome})")
-    if ocorrencia.perito_atribuido: add_linha("Perito Atribuído", ocorrencia.perito_atribuido.nome_completo)
+    if ocorrencia.servico_pericial: 
+        add_linha("Serviço Pericial", ocorrencia.servico_pericial.nome)
+    if ocorrencia.unidade_demandante: 
+        add_linha("Unidade Demandante", ocorrencia.unidade_demandante.nome)
+    if ocorrencia.autoridade: 
+        add_linha("Autoridade Demandante", f"{ocorrencia.autoridade.nome} ({ocorrencia.autoridade.cargo.nome})")
+    if ocorrencia.perito_atribuido: 
+        add_linha("Perito Atribuído", ocorrencia.perito_atribuido.nome_completo)
 
     story.append(Paragraph("2. DADOS DO FATO", styles['Subtitulo']))
     add_linha("Data do Fato", ocorrencia.data_fato.strftime('%d/%m/%Y'))
-    if ocorrencia.hora_fato: add_linha("Hora do Fato", ocorrencia.hora_fato.strftime('%H:%M'))
-    if ocorrencia.cidade: add_linha("Cidade", ocorrencia.cidade.nome)
-    if ocorrencia.classificacao: add_linha("Classificação", f"{ocorrencia.classificacao.codigo} - {ocorrencia.classificacao.nome}")
+    if ocorrencia.hora_fato: 
+        add_linha("Hora do Fato", ocorrencia.hora_fato.strftime('%H:%M'))
+    if ocorrencia.cidade: 
+        add_linha("Cidade", ocorrencia.cidade.nome)
+    if ocorrencia.classificacao: 
+        add_linha("Classificação", f"{ocorrencia.classificacao.codigo} - {ocorrencia.classificacao.nome}")
 
     story.append(Paragraph("3. HISTÓRICO / OBSERVAÇÕES", styles['Subtitulo']))
     add_paragrafo(ocorrencia.historico or "Não informado.")
+    
+    # --- SEÇÃO DE PROCEDIMENTO E DOCUMENTOS ---
+    story.append(Paragraph("3.1. PROCEDIMENTO E DOCUMENTOS", styles['Subtitulo']))
+
+    # Procedimento Cadastrado
+    if ocorrencia.procedimento_cadastrado:
+        proc = ocorrencia.procedimento_cadastrado
+        add_linha("Tipo de Procedimento", proc.tipo_procedimento.sigla)
+        add_linha("Número do Procedimento", f"{proc.numero}/{proc.ano}")
+    else:
+        add_paragrafo("Nenhum procedimento vinculado.")
+
+    # Documento de Origem
+    if ocorrencia.tipo_documento_origem:
+        add_linha("Documento de Origem", ocorrencia.tipo_documento_origem.nome)
+
+    if ocorrencia.numero_documento_origem:
+        add_linha("Nº do Documento", ocorrencia.numero_documento_origem)
+
+    if ocorrencia.data_documento_origem:
+        add_linha("Data do Documento", ocorrencia.data_documento_origem.strftime('%d/%m/%Y'))
+
+    # Processo SEI
+    if ocorrencia.processo_sei_numero:
+        add_linha("Processo SEI", ocorrencia.processo_sei_numero)
+
+    story.append(Spacer(1, 0.3*cm))
 
     # --- SEÇÃO DAS FICHAS ESPECÍFICAS ---
     story.append(Paragraph("4. DADOS ESPECÍFICOS DA PERÍCIA", styles['Subtitulo']))
@@ -71,12 +106,11 @@ def gerar_pdf_ocorrencia(ocorrencia, request):
         ficha = ocorrencia.ficha_local_crime
         add_linha("Tipo de Ficha", "Local de Crime")
         add_linha("Endereço", ficha.endereco_completo)
-        if ficha.auxiliar: add_linha("Auxiliar", ficha.auxiliar.nome_completo)
+        if ficha.auxiliar: 
+            add_linha("Auxiliar", ficha.auxiliar.nome_completo)
         ficha_impressa = True
     except AttributeError:
-        pass # Ignora se a ficha não existir
-    
-    # Adicione aqui os 'try/except' para as outras fichas...
+        pass
 
     if not ficha_impressa:
         add_paragrafo("Nenhuma ficha específica associada.")
@@ -605,6 +639,7 @@ def gerar_pdf_relatorio_geral(request):
     buffer.seek(0)
     filename = f"RELATORIO_GERAL-{timezone.now().strftime('%Y%m%d_%H%M')}.pdf"
     return FileResponse(buffer, as_attachment=True, filename=filename)
+
 
 def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
     """Gera PDF dos relatórios gerenciais com os dados filtrados"""
