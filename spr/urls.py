@@ -50,6 +50,7 @@ router.register(r'tipos-documento', TipoDocumentoViewSet)
 router.register(r'ocorrencias', OcorrenciaViewSet)
 router.register(r'relatorios-gerenciais', RelatoriosGerenciaisViewSet, basename='relatorios-gerenciais')
 router.register(r'registrar', UserRegistrationViewSet, basename='user-registration')
+router.register(r'ordens-servico', OrdemServicoViewSet, basename='ordens-servico')
 
 
 # =============================================================================
@@ -62,8 +63,6 @@ ocorrencias_router.register(r'fichas-constatacao-substancia', FichaConstatacaoSu
 ocorrencias_router.register(r'fichas-documentoscopia', FichaDocumentoscopiaViewSet, basename='ocorrencia-fichas-documentoscopia')
 ocorrencias_router.register(r'fichas-material-diverso', FichaMaterialDiversoViewSet, basename='ocorrencia-fichas-material-diverso')
 ocorrencias_router.register(r'movimentacoes', MovimentacaoViewSet, basename='ocorrencia-movimentacoes')
-ocorrencias_router.register(r'ordens-servico', OrdemServicoViewSet, basename='ocorrencia-ordensservico')
-
 
 # =============================================================================
 # ROTEADORES ANINHADOS (NÍVEL 3 - ITENS DENTRO DE FICHAS)

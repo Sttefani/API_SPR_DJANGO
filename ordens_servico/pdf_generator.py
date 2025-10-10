@@ -80,7 +80,8 @@ def gerar_pdf_ordem_servico(ordem_servico, request):
     if ordem_servico.autoridade_demandante:
         add_linha("Autoridade Demandante", f"{ordem_servico.autoridade_demandante.nome} ({ordem_servico.autoridade_demandante.cargo.nome})" if ordem_servico.autoridade_demandante.cargo else ordem_servico.autoridade_demandante.nome)
     if ordem_servico.procedimento:
-        add_linha("Procedimento", ordem_servico.procedimento.nome)
+       if ordem_servico.procedimento:
+        add_linha("Procedimento", str(ordem_servico.procedimento))
 
     # Documentos de Referência
     story.append(Paragraph("5. DOCUMENTOS DE REFERÊNCIA", styles['Subtitulo']))
@@ -226,14 +227,16 @@ def gerar_pdf_oficial_ordem_servico(ordem_servico, request):
         canvas.drawRightString(doc.width + doc.leftMargin, doc.bottomMargin - 1*cm, f"Página {doc.page}")
         canvas.restoreState()
 
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=3*cm)
+    # MARGENS REDUZIDAS
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=1.5*cm, leftMargin=1.5*cm, topMargin=1.2*cm, bottomMargin=2.5*cm)
     
     styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name='TituloOficial', fontSize=16, fontName='Helvetica-Bold', alignment=TA_CENTER, spaceAfter=20))
-    styles.add(ParagraphStyle(name='NumeroOS', fontSize=12, fontName='Helvetica-Bold', alignment=TA_CENTER, spaceAfter=15))
-    styles.add(ParagraphStyle(name='CampoOficial', fontSize=10, fontName='Helvetica', leading=16, spaceAfter=8))
-    styles.add(ParagraphStyle(name='TextoPadrao', fontSize=10, fontName='Helvetica', leading=16, spaceAfter=12, alignment=TA_LEFT))
-    styles.add(ParagraphStyle(name='Assinatura', fontSize=10, fontName='Helvetica', leading=16, spaceAfter=8, alignment=TA_CENTER))
+    # ESTILOS COMPACTADOS
+    styles.add(ParagraphStyle(name='TituloOficial', fontSize=14, fontName='Helvetica-Bold', alignment=TA_CENTER, spaceAfter=8))
+    styles.add(ParagraphStyle(name='NumeroOS', fontSize=11, fontName='Helvetica-Bold', alignment=TA_CENTER, spaceAfter=8))
+    styles.add(ParagraphStyle(name='CampoOficial', fontSize=9, fontName='Helvetica', leading=12, spaceAfter=4))
+    styles.add(ParagraphStyle(name='TextoPadrao', fontSize=9, fontName='Helvetica', leading=12, spaceAfter=6, alignment=TA_LEFT))
+    styles.add(ParagraphStyle(name='Assinatura', fontSize=9, fontName='Helvetica', leading=12, spaceAfter=4, alignment=TA_CENTER))
 
     story = []
 
@@ -244,7 +247,7 @@ def gerar_pdf_oficial_ordem_servico(ordem_servico, request):
     story.append(Paragraph(f"Nº {ordem_servico.numero_os}", styles['NumeroOS']))
     story.append(Paragraph(f"Ocorrência: {ordem_servico.ocorrencia.numero_ocorrencia}", styles['NumeroOS']))
     
-    story.append(Spacer(1, 1*cm))
+    story.append(Spacer(1, 0.4*cm))  # Reduzido de 1cm
 
     # Dados principais
     if ordem_servico.unidade_demandante:
@@ -267,7 +270,7 @@ def gerar_pdf_oficial_ordem_servico(ordem_servico, request):
         ordem_servico.processo_sei_referencia or 
         ordem_servico.processo_judicial_referencia):
         
-        story.append(Spacer(1, 0.5*cm))
+        story.append(Spacer(1, 0.3*cm))  # Reduzido de 0.5cm
         story.append(Paragraph("<b>DOCUMENTOS DE REFERÊNCIA:</b>", styles['CampoOficial']))
         
         if ordem_servico.numero_documento_referencia:
@@ -281,31 +284,43 @@ def gerar_pdf_oficial_ordem_servico(ordem_servico, request):
             story.append(Paragraph(f"• Processo Judicial: {ordem_servico.processo_judicial_referencia}", styles['CampoOficial']))
 
     # Texto padrão
-    story.append(Spacer(1, 1*cm))
+    story.append(Spacer(1, 0.5*cm))  # Reduzido de 1cm
     story.append(Paragraph(ordem_servico.texto_padrao, styles['TextoPadrao']))
 
     # Dados de emissão
-    story.append(Spacer(1, 1.5*cm))
+    story.append(Spacer(1, 0.5*cm))  # Reduzido de 1.5cm
     data_emissao = ordem_servico.created_at.strftime('%d de %B de %Y')
     story.append(Paragraph(f"Emitida em {data_emissao}", styles['CampoOficial']))
 
     # Espaço para assinaturas
-    story.append(Spacer(1, 2*cm))
-    
+    story.append(Spacer(1, 1*cm))  # Reduzido de 2cm
+
     story.append(Paragraph("_" * 50, styles['Assinatura']))
-    emissor = ordem_servico.created_by.nome_completo if ordem_servico.created_by else "Sistema"
-    story.append(Paragraph(f"{emissor}", styles['Assinatura']))
+
+    # Usa "ordenada_por" (quem ordenou = diretor/perito)
+    if ordem_servico.ordenada_por:
+        diretor = ordem_servico.ordenada_por.nome_completo
+        
+        # Pega o cargo do perito se tiver
+        cargo_info = ""
+        if hasattr(ordem_servico.ordenada_por, 'cargo') and ordem_servico.ordenada_por.cargo:
+            cargo_info = f"<br/>{ordem_servico.ordenada_por.cargo.nome}"
+        
+        story.append(Paragraph(f"{diretor}{cargo_info}", styles['Assinatura']))
+    else:
+        story.append(Paragraph("Diretor não informado", styles['Assinatura']))
+
     story.append(Paragraph("Diretor/Autoridade Competente", styles['Assinatura']))
 
     # Espaço para ciência do perito
     if ordem_servico.ocorrencia.perito_atribuido:
-        story.append(Spacer(1, 1.5*cm))
+        story.append(Spacer(1, 0.8*cm))  # Reduzido de 1.5cm
         story.append(Paragraph("CIÊNCIA DO PERITO:", styles['CampoOficial']))
         
         if ordem_servico.ciente_por:
             story.append(Paragraph(f"Registrada em {ordem_servico.data_ciencia.strftime('%d/%m/%Y às %H:%M')}", styles['CampoOficial']))
         else:
-            story.append(Spacer(1, 1*cm))
+            story.append(Spacer(1, 0.6*cm))  # Reduzido de 1cm
             story.append(Paragraph("_" * 50, styles['Assinatura']))
             story.append(Paragraph(f"{ordem_servico.ocorrencia.perito_atribuido.nome_completo}", styles['Assinatura']))
             story.append(Paragraph("Perito Designado", styles['Assinatura']))
@@ -314,4 +329,4 @@ def gerar_pdf_oficial_ordem_servico(ordem_servico, request):
     
     buffer.seek(0)
     filename = f"OS_OFICIAL-{ordem_servico.numero_os.replace('/', '_')}.pdf"
-    return FileResponse(buffer, as_attachment=True, filename=filename)s
+    return FileResponse(buffer, as_attachment=True, filename=filename)
