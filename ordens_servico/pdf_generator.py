@@ -8,6 +8,123 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import cm
 
+# ✅ DICIONÁRIO DE MESES EM PORTUGUÊS
+MESES_PT = {
+    1: 'janeiro', 2: 'fevereiro', 3: 'março', 4: 'abril',
+    5: 'maio', 6: 'junho', 7: 'julho', 8: 'agosto',
+    9: 'setembro', 10: 'outubro', 11: 'novembro', 12: 'dezembro'
+}
+
+def formatar_data_portugues(data):
+    """Formata data em português: 10 de outubro de 2025"""
+    dia = data.day
+    mes = MESES_PT[data.month]
+    ano = data.year
+    return f"{dia} de {mes} de {ano}"
+
+
+# ✅ NOVA FUNÇÃO: GERAR BADGE DE STATUS
+def gerar_badge_status(status, get_status_display):
+    """
+    Cria um badge colorido para o status da OS.
+    Retorna uma Table do ReportLab com fundo colorido.
+    """
+    # Mapeamento de cores por status
+    cores_status = {
+        'CONCLUIDA': colors.HexColor('#10b981'),      # Verde
+        'EM_ANDAMENTO': colors.HexColor('#3b82f6'),   # Azul
+        'ABERTA': colors.HexColor('#f59e0b'),         # Amarelo/Laranja
+        'AGUARDANDO_CIENCIA': colors.HexColor('#eab308'),  # Amarelo
+    }
+    
+    # Detecta se está vencida (status genérico)
+    texto_status = get_status_display
+    cor_fundo = cores_status.get(status, colors.HexColor('#6b7280'))  # Cinza padrão
+    
+    # Badge em formato de tabela
+    badge_data = [[texto_status]]
+    badge_table = Table(badge_data, colWidths=[4*cm])
+    badge_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), cor_fundo),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.white),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('ROUNDEDCORNERS', [5, 5, 5, 5]),
+    ]))
+    
+    return badge_table
+
+
+# ✅ NOVA FUNÇÃO: SEÇÃO DE TRAMITAÇÃO
+def adicionar_secao_tramitacao(story, ordem_servico, styles):
+    """
+    Adiciona a seção de tramitação com timeline completa:
+    - Emissão
+    - Ciência
+    - Conclusão (se houver)
+    """
+    story.append(Spacer(1, 0.4*cm))
+    story.append(Paragraph("📅 TRAMITAÇÃO", styles['Subtitulo']))
+    
+    # Dados de emissão
+    data_emissao = ordem_servico.created_at.strftime('%d/%m/%Y às %H:%M')
+    emissor = ordem_servico.created_by.nome_completo if ordem_servico.created_by else "Sistema"
+    
+    story.append(Paragraph(
+        f"<b>• Emitida em:</b> {data_emissao}",
+        styles['NormalCompacto']
+    ))
+    story.append(Paragraph(
+        f"  <b>Por:</b> {emissor}",
+        styles['NormalCompacto']
+    ))
+    story.append(Spacer(1, 0.2*cm))
+    
+    # Dados de ciência
+    if ordem_servico.ciente_por:
+        data_ciencia = ordem_servico.data_ciencia.strftime('%d/%m/%Y às %H:%M')
+        perito_ciente = ordem_servico.ciente_por.nome_completo
+        
+        story.append(Paragraph(
+            f"<b>• Ciência em:</b> {data_ciencia}",
+            styles['NormalCompacto']
+        ))
+        story.append(Paragraph(
+            f"  <b>Por:</b> {perito_ciente}",
+            styles['NormalCompacto']
+        ))
+        story.append(Spacer(1, 0.2*cm))
+    else:
+        story.append(Paragraph(
+            "<b>• Ciência:</b> Aguardando",
+            styles['NormalCompacto']
+        ))
+        story.append(Spacer(1, 0.2*cm))
+    
+    # Dados de conclusão
+    if ordem_servico.data_conclusao:
+        data_conclusao = ordem_servico.data_conclusao.strftime('%d/%m/%Y às %H:%M')
+        
+        # ✅ USA O CAMPO ESPECÍFICO concluida_por
+        concluido_por = "Sistema"
+        if ordem_servico.concluida_por:
+            concluido_por = ordem_servico.concluida_por.nome_completo
+        
+        story.append(Paragraph(
+            f"<b>• Concluída em:</b> {data_conclusao}",
+            styles['NormalCompacto']
+        ))
+        story.append(Paragraph(
+            f"  <b>Por:</b> {concluido_por}",
+            styles['NormalCompacto']
+        ))
+    
+    story.append(Spacer(1, 0.3*cm))
+
+
 def gerar_pdf_ordem_servico(ordem_servico, request):
     buffer = io.BytesIO()
     
@@ -45,28 +162,21 @@ def gerar_pdf_ordem_servico(ordem_servico, request):
     story.append(Paragraph("ORDEM DE SERVIÇO", styles['Titulo']))
     add_linha("Número da OS", ordem_servico.numero_os)
     add_linha("Ocorrência", ordem_servico.ocorrencia.numero_ocorrencia)
-    add_linha("Status", ordem_servico.get_status_display())
-    add_linha("Emitida em", ordem_servico.created_at.strftime('%d/%m/%Y às %H:%M'))
-    if ordem_servico.created_by: 
-        add_linha("Emitida por", ordem_servico.created_by.nome_completo)
+    
+    # ✅ BADGE DE STATUS
+    story.append(Spacer(1, 0.3*cm))
+    badge = gerar_badge_status(ordem_servico.status, ordem_servico.get_status_display())
+    story.append(badge)
+    
+    # ✅ SEÇÃO DE TRAMITAÇÃO
+    adicionar_secao_tramitacao(story, ordem_servico, styles)
 
+    # Dados gerais
     story.append(Paragraph("1. DADOS DA ORDEM DE SERVIÇO", styles['Subtitulo']))
     add_linha("Prazo para Conclusão", f"{ordem_servico.prazo_dias} dias")
-    if ordem_servico.data_conclusao:
-        add_linha("Data de Conclusão", ordem_servico.data_conclusao.strftime('%d/%m/%Y às %H:%M'))
-
-    # Dados de Ciência
-    story.append(Paragraph("2. DADOS DE CIÊNCIA", styles['Subtitulo']))
-    if ordem_servico.ciente_por:
-        add_linha("Perito Ciente", ordem_servico.ciente_por.nome_completo)
-        add_linha("Data da Ciência", ordem_servico.data_ciencia.strftime('%d/%m/%Y às %H:%M:%S'))
-        if ordem_servico.ip_ciencia:
-            add_linha("IP da Ciência", ordem_servico.ip_ciencia)
-    else:
-        add_paragrafo("Aguardando ciência do perito.")
 
     # Dados da Ocorrência relacionada
-    story.append(Paragraph("3. DADOS DA OCORRÊNCIA", styles['Subtitulo']))
+    story.append(Paragraph("2. DADOS DA OCORRÊNCIA", styles['Subtitulo']))
     if ordem_servico.ocorrencia:
         if hasattr(ordem_servico.ocorrencia, 'status'):
             add_linha("Status da Ocorrência", ordem_servico.ocorrencia.get_status_display())
@@ -74,17 +184,16 @@ def gerar_pdf_ordem_servico(ordem_servico, request):
             add_linha("Perito Atribuído", ordem_servico.ocorrencia.perito_atribuido.nome_completo)
 
     # Dados Espelhados (Snapshot da ocorrência)
-    story.append(Paragraph("4. DADOS DEMANDANTES", styles['Subtitulo']))
+    story.append(Paragraph("3. DADOS DEMANDANTES", styles['Subtitulo']))
     if ordem_servico.unidade_demandante:
         add_linha("Unidade Demandante", ordem_servico.unidade_demandante.nome)
     if ordem_servico.autoridade_demandante:
         add_linha("Autoridade Demandante", f"{ordem_servico.autoridade_demandante.nome} ({ordem_servico.autoridade_demandante.cargo.nome})" if ordem_servico.autoridade_demandante.cargo else ordem_servico.autoridade_demandante.nome)
     if ordem_servico.procedimento:
-       if ordem_servico.procedimento:
         add_linha("Procedimento", str(ordem_servico.procedimento))
 
     # Documentos de Referência
-    story.append(Paragraph("5. DOCUMENTOS DE REFERÊNCIA", styles['Subtitulo']))
+    story.append(Paragraph("4. DOCUMENTOS DE REFERÊNCIA", styles['Subtitulo']))
     if ordem_servico.tipo_documento_referencia:
         add_linha("Tipo de Documento", ordem_servico.tipo_documento_referencia.nome)
     if ordem_servico.numero_documento_referencia:
@@ -95,11 +204,11 @@ def gerar_pdf_ordem_servico(ordem_servico, request):
         add_linha("Processo Judicial", ordem_servico.processo_judicial_referencia)
 
     # Texto Padrão
-    story.append(Paragraph("6. DETERMINAÇÃO", styles['Subtitulo']))
+    story.append(Paragraph("5. DETERMINAÇÃO", styles['Subtitulo']))
     add_paragrafo(ordem_servico.texto_padrao)
 
     # Dados de Auditoria
-    story.append(Paragraph("7. DADOS DE AUDITORIA", styles['Subtitulo']))
+    story.append(Paragraph("6. DADOS DE AUDITORIA", styles['Subtitulo']))
     add_linha("Data de Criação", ordem_servico.created_at.strftime('%d/%m/%Y às %H:%M:%S'))
     if ordem_servico.created_by:
         add_linha("Criado por", ordem_servico.created_by.nome_completo)
@@ -174,12 +283,16 @@ def gerar_pdf_listagem_ordens_servico(ocorrencia, request):
         for i, os in enumerate(ordens_servico, 1):
             story.append(Paragraph(f"<b>{i}. Ordem de Serviço {os.numero_os}</b>", styles['Subtitulo']))
             
+            # Badge de status
+            badge = gerar_badge_status(os.status, os.get_status_display())
+            story.append(badge)
+            story.append(Spacer(1, 0.2*cm))
+            
             # Dados da OS
             data_emissao_os = os.created_at.strftime('%d/%m/%Y às %H:%M:%S')
             emissor = os.created_by.nome_completo if os.created_by else "Sistema"
             story.append(Paragraph(f"<b>Data de Emissão:</b> {data_emissao_os}", styles['OrdemItem']))
             story.append(Paragraph(f"<b>Emitida por:</b> {emissor}", styles['OrdemItem']))
-            story.append(Paragraph(f"<b>Status:</b> {os.get_status_display()}", styles['OrdemItem']))
             story.append(Paragraph(f"<b>Prazo:</b> {os.prazo_dias} dias", styles['OrdemItem']))
             
             if os.ciente_por:
@@ -188,7 +301,8 @@ def gerar_pdf_listagem_ordens_servico(ocorrencia, request):
                 story.append(Paragraph("<b>Ciência:</b> Aguardando", styles['OrdemItem']))
             
             if os.data_conclusao:
-                story.append(Paragraph(f"<b>Conclusão:</b> {os.data_conclusao.strftime('%d/%m/%Y às %H:%M')}", styles['OrdemItem']))
+                concluido_por = os.concluida_por.nome_completo if os.concluida_por else "Sistema"
+                story.append(Paragraph(f"<b>Conclusão:</b> {os.data_conclusao.strftime('%d/%m/%Y às %H:%M')} por {concluido_por}", styles['OrdemItem']))
             
             # Documentos de referência
             if os.numero_documento_referencia or os.processo_sei_referencia or os.processo_judicial_referencia:
@@ -237,6 +351,8 @@ def gerar_pdf_oficial_ordem_servico(ordem_servico, request):
     styles.add(ParagraphStyle(name='CampoOficial', fontSize=9, fontName='Helvetica', leading=12, spaceAfter=4))
     styles.add(ParagraphStyle(name='TextoPadrao', fontSize=9, fontName='Helvetica', leading=12, spaceAfter=6, alignment=TA_LEFT))
     styles.add(ParagraphStyle(name='Assinatura', fontSize=9, fontName='Helvetica', leading=12, spaceAfter=4, alignment=TA_CENTER))
+    styles.add(ParagraphStyle(name='Subtitulo', fontSize=10, fontName='Helvetica-Bold', spaceAfter=4))
+    styles.add(ParagraphStyle(name='NormalCompacto', fontSize=9, leading=12, spaceAfter=2))
 
     story = []
 
@@ -247,7 +363,13 @@ def gerar_pdf_oficial_ordem_servico(ordem_servico, request):
     story.append(Paragraph(f"Nº {ordem_servico.numero_os}", styles['NumeroOS']))
     story.append(Paragraph(f"Ocorrência: {ordem_servico.ocorrencia.numero_ocorrencia}", styles['NumeroOS']))
     
-    story.append(Spacer(1, 0.4*cm))  # Reduzido de 1cm
+    # ✅ BADGE DE STATUS
+    story.append(Spacer(1, 0.2*cm))
+    badge = gerar_badge_status(ordem_servico.status, ordem_servico.get_status_display())
+    story.append(badge)
+    
+    # ✅ SEÇÃO DE TRAMITAÇÃO
+    adicionar_secao_tramitacao(story, ordem_servico, styles)
 
     # Dados principais
     if ordem_servico.unidade_demandante:
@@ -270,7 +392,7 @@ def gerar_pdf_oficial_ordem_servico(ordem_servico, request):
         ordem_servico.processo_sei_referencia or 
         ordem_servico.processo_judicial_referencia):
         
-        story.append(Spacer(1, 0.3*cm))  # Reduzido de 0.5cm
+        story.append(Spacer(1, 0.3*cm))
         story.append(Paragraph("<b>DOCUMENTOS DE REFERÊNCIA:</b>", styles['CampoOficial']))
         
         if ordem_servico.numero_documento_referencia:
@@ -284,16 +406,16 @@ def gerar_pdf_oficial_ordem_servico(ordem_servico, request):
             story.append(Paragraph(f"• Processo Judicial: {ordem_servico.processo_judicial_referencia}", styles['CampoOficial']))
 
     # Texto padrão
-    story.append(Spacer(1, 0.5*cm))  # Reduzido de 1cm
+    story.append(Spacer(1, 0.5*cm))
     story.append(Paragraph(ordem_servico.texto_padrao, styles['TextoPadrao']))
 
-    # Dados de emissão
-    story.append(Spacer(1, 0.5*cm))  # Reduzido de 1.5cm
-    data_emissao = ordem_servico.created_at.strftime('%d de %B de %Y')
+    # ✅ DADOS DE EMISSÃO EM PORTUGUÊS
+    story.append(Spacer(1, 0.5*cm))
+    data_emissao = formatar_data_portugues(ordem_servico.created_at)
     story.append(Paragraph(f"Emitida em {data_emissao}", styles['CampoOficial']))
 
     # Espaço para assinaturas
-    story.append(Spacer(1, 1*cm))  # Reduzido de 2cm
+    story.append(Spacer(1, 1*cm))
 
     story.append(Paragraph("_" * 50, styles['Assinatura']))
 
@@ -314,13 +436,13 @@ def gerar_pdf_oficial_ordem_servico(ordem_servico, request):
 
     # Espaço para ciência do perito
     if ordem_servico.ocorrencia.perito_atribuido:
-        story.append(Spacer(1, 0.8*cm))  # Reduzido de 1.5cm
+        story.append(Spacer(1, 0.8*cm))
         story.append(Paragraph("CIÊNCIA DO PERITO:", styles['CampoOficial']))
         
         if ordem_servico.ciente_por:
             story.append(Paragraph(f"Registrada em {ordem_servico.data_ciencia.strftime('%d/%m/%Y às %H:%M')}", styles['CampoOficial']))
         else:
-            story.append(Spacer(1, 0.6*cm))  # Reduzido de 1cm
+            story.append(Spacer(1, 0.6*cm))
             story.append(Paragraph("_" * 50, styles['Assinatura']))
             story.append(Paragraph(f"{ordem_servico.ocorrencia.perito_atribuido.nome_completo}", styles['Assinatura']))
             story.append(Paragraph("Perito Designado", styles['Assinatura']))

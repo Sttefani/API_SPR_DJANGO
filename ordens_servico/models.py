@@ -31,6 +31,7 @@ class OrdemServico(AuditModel):
         related_name='ordens_servico'
     )
     
+    
     # --- Dados da Própria OS ---
     numero_os = models.CharField(
         max_length=20,
@@ -160,6 +161,17 @@ class OrdemServico(AuditModel):
     
     data_ciencia = models.DateTimeField(null=True, blank=True)
     ip_ciencia = models.GenericIPAddressField(null=True, blank=True)
+    
+    # ✅ NOVO CAMPO: Quem concluiu a OS
+    concluida_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='ordens_concluidas',
+        verbose_name='Concluída por',
+        help_text='Usuário que deu baixa/concluiu esta OS'
+    )
     
     # ========================================
     # PROPRIEDADES CALCULADAS
@@ -294,9 +306,7 @@ class OrdemServico(AuditModel):
     # ========================================
     
     def ocultar_detalhes_ate_ciencia(self):
-        
-       return self.status == self.Status.AGUARDANDO_CIENCIA
-
+        return self.status == self.Status.AGUARDANDO_CIENCIA
     
     def registrar_visualizacao(self):
         """
@@ -372,6 +382,7 @@ class OrdemServico(AuditModel):
         """
         self.status = self.Status.CONCLUIDA
         self.data_conclusao = timezone.now()
+        self.concluida_por = user  # ✅ SALVA QUEM CONCLUIU
         self.updated_by = user
         self.save()
     

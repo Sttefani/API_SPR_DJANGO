@@ -58,6 +58,7 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         'updated_by',
         'ordenada_por',
         'ciente_por',
+        'concluida_por',
         'unidade_demandante',
         'autoridade_demandante',
         'procedimento',
@@ -436,36 +437,62 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             status=status.HTTP_200_OK
         )
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], url_path='concluir')
     def concluir(self, request, pk=None, **kwargs):
         """
-        Marca a OS como concluída.
-        Só ADMINISTRATIVO pode concluir.
+        Marca a OS como concluída (dá baixa).
+        Apenas ADMINISTRATIVO pode concluir.
+        
+        Endpoint: POST /api/ordens-servico/{id}/concluir/
+        
+        Validações:
+        - Apenas admin pode concluir
+        - OS não pode estar já concluída
+        - Perito deve ter tomado ciência
+        
+        Retorna:
+        - 200 OK: OS concluída com sucesso
+        - 403 FORBIDDEN: Usuário sem permissão
+        - 400 BAD_REQUEST: Validação de negócio falhou
         """
         ordem_servico = self.get_object()
         
-        # Validação
+        # ✅ VALIDAÇÃO 1: Apenas administrativos
+        if request.user.perfil not in ['ADMINISTRATIVO', 'SUPER_ADMIN']:
+            return Response(
+                {'error': 'Apenas administrativos podem concluir ordens de serviço.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # ✅ VALIDAÇÃO 2: Não pode concluir OS já concluída
         if ordem_servico.status == OrdemServico.Status.CONCLUIDA:
             return Response(
-                {"message": "Esta OS já está concluída."},
+                {'error': 'Esta ordem de serviço já está concluída.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Valida se a ocorrência está finalizada
-        if not ordem_servico.ocorrencia.esta_finalizada:
+        # ✅ VALIDAÇÃO 3: Perito deve ter tomado ciência
+        if ordem_servico.status == OrdemServico.Status.AGUARDANDO_CIENCIA:
             return Response(
-                {"error": "Não é possível concluir a OS. A ocorrência ainda não foi finalizada."},
+                {'error': 'O perito ainda não tomou ciência desta OS. A conclusão só é possível após a ciência.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Conclui
+        # ✅ VALIDAÇÃO 4: Verificar se tem ciência (dupla checagem)
+        if not ordem_servico.ciente_por:
+            return Response(
+                {'error': 'Esta OS não possui registro de ciência. Solicite ao perito que tome ciência primeiro.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # ✅ CONCLUI A OS (o método concluir() no model agora salva o concluida_por)
         ordem_servico.concluir(user=request.user)
         
-        # Retorna resposta
+        # ✅ RETORNA SUCESSO COM STATUS 200
         serializer = self.get_serializer(ordem_servico)
         return Response(
             {
-                'message': f'OS {ordem_servico.numero_os} concluída com sucesso.',
+                'message': f'OS {ordem_servico.numero_os} concluída com sucesso!',
                 'ordem_servico': serializer.data
             },
             status=status.HTTP_200_OK
@@ -507,13 +534,14 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
     # =========================================================================
     # GERAÇÃO DE PDFs
     # =========================================================================
+    
     @action(detail=True, methods=['get'], url_path='pdf')
     def gerar_pdf(self, request, pk=None):
         """Gera PDF simples da OS"""
         ordem = self.get_object()
         
-        # Administrativos veem tudo sempre
-        if request.user.groups.filter(name='Administrativo').exists():
+        # ✅ CORRIGIDO: Administrativos veem tudo sempre
+        if request.user.perfil in ['ADMINISTRATIVO', 'SUPER_ADMIN']:
             return gerar_pdf_ordem_servico(ordem, request)
         
         # Peritos precisam tomar ciência primeiro
@@ -530,8 +558,8 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         """Gera PDF oficial da OS para impressão/assinatura"""
         ordem_servico = self.get_object()
         
-        # Administrativos veem tudo sempre
-        if request.user.groups.filter(name='Administrativo').exists():
+        # ✅ CORRIGIDO: Administrativos veem tudo sempre
+        if request.user.perfil in ['ADMINISTRATIVO', 'SUPER_ADMIN']:
             return gerar_pdf_oficial_ordem_servico(ordem_servico, request)
         
         # Peritos precisam tomar ciência primeiro
@@ -563,4 +591,3 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             )
         
         return gerar_pdf_listagem_ordens_servico(ocorrencia, request)
-    
