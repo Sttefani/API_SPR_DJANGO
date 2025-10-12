@@ -452,3 +452,196 @@ def gerar_pdf_oficial_ordem_servico(ordem_servico, request):
     buffer.seek(0)
     filename = f"OS_OFICIAL-{ordem_servico.numero_os.replace('/', '_')}.pdf"
     return FileResponse(buffer, as_attachment=True, filename=filename)
+
+def gerar_pdf_relatorios_gerenciais(dados_relatorio, filtros_aplicados):
+    """
+    Gera PDF dos relatórios gerenciais de Ordens de Serviço.
+    
+    Args:
+        dados_relatorio: Dict com os dados do relatório
+        filtros_aplicados: Dict com os filtros que foram aplicados
+    """
+    buffer = io.BytesIO()
+    
+    data_emissao = timezone.now().strftime('%d/%m/%Y às %H:%M:%S')
+
+    def footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont('Helvetica', 8)
+        canvas.line(doc.leftMargin, doc.bottomMargin - 0.5*cm, doc.width + doc.leftMargin, doc.bottomMargin - 0.5*cm)
+        canvas.drawString(doc.leftMargin, doc.bottomMargin - 1*cm, f"Relatório Gerencial - Ordens de Serviço")
+        canvas.drawString(doc.leftMargin, doc.bottomMargin - 1.5*cm, f"Emitido em: {data_emissao}")
+        canvas.drawRightString(doc.width + doc.leftMargin, doc.bottomMargin - 1.5*cm, f"Página {doc.page}")
+        canvas.restoreState()
+
+    # Documento em paisagem para caber mais informações
+    from reportlab.lib.pagesizes import landscape
+    doc = SimpleDocTemplate(
+        buffer, 
+        pagesize=landscape(A4), 
+        rightMargin=1*cm, 
+        leftMargin=1*cm, 
+        topMargin=1.5*cm, 
+        bottomMargin=2.5*cm
+    )
+    
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name='TituloRelatorio', fontSize=16, fontName='Helvetica-Bold', alignment=TA_CENTER, spaceAfter=12, textColor=colors.HexColor('#DAA520')))
+    styles.add(ParagraphStyle(name='SubtituloRelatorio', fontSize=12, fontName='Helvetica-Bold', spaceBefore=10, spaceAfter=6, textColor=colors.HexColor('#2c3e50')))
+    styles.add(ParagraphStyle(name='NormalCompacto', fontSize=9, leading=12, spaceAfter=2))
+    
+    story = []
+    
+    # Título
+    story.append(Paragraph("RELATÓRIO GERENCIAL - ORDENS DE SERVIÇO", styles['TituloRelatorio']))
+    story.append(Spacer(1, 0.3*cm))
+    
+    # Filtros aplicados
+    if filtros_aplicados:
+        story.append(Paragraph("FILTROS APLICADOS:", styles['SubtituloRelatorio']))
+        filtros_texto = []
+        if filtros_aplicados.get('data_inicio'):
+            filtros_texto.append(f"Data Início: {filtros_aplicados['data_inicio']}")
+        if filtros_aplicados.get('data_fim'):
+            filtros_texto.append(f"Data Fim: {filtros_aplicados['data_fim']}")
+        if filtros_aplicados.get('perito_nome'):
+            filtros_texto.append(f"Perito: {filtros_aplicados['perito_nome']}")
+        if filtros_aplicados.get('unidade_nome'):
+            filtros_texto.append(f"Unidade: {filtros_aplicados['unidade_nome']}")
+        if filtros_aplicados.get('servico_nome'):
+            filtros_texto.append(f"Serviço: {filtros_aplicados['servico_nome']}")
+        if filtros_aplicados.get('status'):
+            filtros_texto.append(f"Status: {filtros_aplicados['status']}")
+        
+        if filtros_texto:
+            story.append(Paragraph(" | ".join(filtros_texto), styles['NormalCompacto']))
+        else:
+            story.append(Paragraph("Todos os registros (sem filtros)", styles['NormalCompacto']))
+        
+        story.append(Spacer(1, 0.5*cm))
+    
+    # 1. RESUMO GERAL
+    resumo = dados_relatorio['resumo_geral']
+    story.append(Paragraph("1. RESUMO GERAL", styles['SubtituloRelatorio']))
+    
+    resumo_data = [
+        ['Indicador', 'Quantidade', '%'],
+        ['Total Emitidas', str(resumo['total_emitidas']), '100%'],
+        ['Aguardando Ciência', str(resumo['aguardando_ciencia']), f"{round(resumo['aguardando_ciencia']/resumo['total_emitidas']*100 if resumo['total_emitidas'] > 0 else 0, 1)}%"],
+        ['Abertas', str(resumo['abertas']), f"{round(resumo['abertas']/resumo['total_emitidas']*100 if resumo['total_emitidas'] > 0 else 0, 1)}%"],
+        ['Em Andamento', str(resumo['em_andamento']), f"{round(resumo['em_andamento']/resumo['total_emitidas']*100 if resumo['total_emitidas'] > 0 else 0, 1)}%"],
+        ['Vencidas', str(resumo['vencidas']), f"{round(resumo['vencidas']/resumo['total_emitidas']*100 if resumo['total_emitidas'] > 0 else 0, 1)}%"],
+        ['Concluídas', str(resumo['concluidas']), f"{round(resumo['concluidas']/resumo['total_emitidas']*100 if resumo['total_emitidas'] > 0 else 0, 1)}%"],
+    ]
+    
+    resumo_table = Table(resumo_data, colWidths=[14*cm, 4*cm, 3*cm])
+    resumo_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#DAA520')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+        ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+        ('TOPPADDING', (0, 0), (-1, 0), 8),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+    ]))
+    
+    story.append(resumo_table)
+    story.append(Spacer(1, 0.8*cm))
+    
+    # 2. TAXA DE CUMPRIMENTO
+    taxa = dados_relatorio['taxa_cumprimento']
+    story.append(Paragraph("2. TAXA DE CUMPRIMENTO DE PRAZOS", styles['SubtituloRelatorio']))
+    
+    taxa_data = [
+        ['Indicador', 'Quantidade', 'Percentual'],
+        ['Cumpridas no Prazo ✓', str(taxa['cumpridas_no_prazo']), f"{taxa['percentual_no_prazo']}%"],
+        ['Cumpridas com Atraso ⚠', str(taxa['cumpridas_com_atraso']), f"{taxa['percentual_com_atraso']}%"],
+        ['Total Concluídas', str(taxa['total_concluidas']), '100%'],
+    ]
+    
+    taxa_table = Table(taxa_data, colWidths=[14*cm, 4*cm, 3*cm])
+    taxa_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#DAA520')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+        ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+        ('TOPPADDING', (0, 0), (-1, 0), 8),
+        ('BACKGROUND', (0, 1), (0, 1), colors.HexColor('#d4edda')),
+        ('BACKGROUND', (0, 2), (0, 2), colors.HexColor('#f8d7da')),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+    ]))
+    
+    story.append(taxa_table)
+    story.append(Spacer(1, 0.8*cm))
+    
+    # 3. PRAZOS MÉDIOS
+    prazos = dados_relatorio['prazos']
+    story.append(Paragraph("3. ESTATÍSTICAS DE PRAZOS", styles['SubtituloRelatorio']))
+    
+    prazos_data = [
+        ['Indicador', 'Valor'],
+        ['Tempo Médio de Conclusão', f"{prazos['tempo_medio_conclusao_dias']} dias"],
+        ['Prazo Médio Concedido', f"{prazos['prazo_medio_concedido']} dias"],
+    ]
+    
+    prazos_table = Table(prazos_data, colWidths=[14*cm, 7*cm])
+    prazos_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#DAA520')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+        ('ALIGN', (1, 0), (1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+        ('TOPPADDING', (0, 0), (-1, 0), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+    ]))
+    
+    story.append(prazos_table)
+    story.append(Spacer(1, 0.8*cm))
+    
+    # 4. PRODUÇÃO POR PERITO (TOP 20)
+    if dados_relatorio['producao_por_perito']:
+        story.append(Paragraph("4. PRODUÇÃO POR PERITO (TOP 20)", styles['SubtituloRelatorio']))
+        
+        perito_data = [['Perito', 'Total', 'Concl.', 'No Prazo', 'Atraso', 'Taxa %', 'Andamento', 'Vencidas']]
+        
+        for item in dados_relatorio['producao_por_perito'][:20]:
+            perito_data.append([
+                item['perito'][:40],
+                str(item['total_emitidas']),
+                str(item['concluidas']),
+                str(item['cumpridas_no_prazo']),
+                str(item['cumpridas_com_atraso']),
+                f"{item['taxa_cumprimento_prazo']}%",
+                str(item['em_andamento']),
+                str(item['vencidas'])
+            ])
+        
+        perito_table = Table(perito_data, colWidths=[10*cm, 2*cm, 2*cm, 2*cm, 2*cm, 2*cm, 2.5*cm, 2*cm])
+        perito_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#DAA520')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+            ('TOPPADDING', (0, 0), (-1, 0), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ]))
+        
+        story.append(perito_table)
+    
+    # Gerar PDF
+    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    
+    buffer.seek(0)
+    filename = f"Relatorio_OS_{timezone.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    return FileResponse(buffer, as_attachment=True, filename=filename)

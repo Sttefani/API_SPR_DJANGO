@@ -63,7 +63,7 @@ class OrdemServicoSerializer(serializers.ModelSerializer):
             'data_vencimento', 'dias_desde_emissao', 'dias_restantes',
             'esta_vencida', 'urgencia', 'percentual_prazo_consumido',
             'prazo_acumulado_total', 'acao_necessaria', 'reiteracoes',
-            'perito_destinatario'
+            'perito_destinatario', 'concluida_com_atraso',  # 
         ]
     
     def get_data_vencimento(self, obj):
@@ -299,11 +299,15 @@ class CriarOrdemServicoComAssinaturaSerializer(serializers.Serializer):
             ocorrencia=ocorrencia,
             prazo_dias=validated_data['prazo_dias'],
             ordenada_por=ordenada_por,
-            observacoes_administrativo=validated_data.get('observacoes_administrativo', ''),
+            observacoes_administrativo=validated_data.get(
+                'observacoes_administrativo', ''),
             tipo_documento_referencia=tipo_doc,
-            numero_documento_referencia=validated_data.get('numero_documento_referencia', ''),
-            processo_sei_referencia=validated_data.get('processo_sei_referencia', ''),
-            processo_judicial_referencia=validated_data.get('processo_judicial_referencia', ''),
+            numero_documento_referencia=validated_data.get(
+                'numero_documento_referencia', ''),
+            processo_sei_referencia=validated_data.get(
+                'processo_sei_referencia', ''),
+            processo_judicial_referencia=validated_data.get(
+                'processo_judicial_referencia', ''),
             # Espelha dados da ocorrência
             unidade_demandante=ocorrencia.unidade_demandante,
             autoridade_demandante=ocorrencia.autoridade,

@@ -4,6 +4,9 @@ from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.utils import timezone
+from django.db.models import Count, Q, Avg, F, ExpressionWrapper, fields
+from django.db.models.functions import TruncDate
+from datetime import timedelta
 
 from .models import OrdemServico
 from .serializers import (
@@ -319,7 +322,8 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         
         return Response(
             {
-                'message': f'Ciência registrada com sucesso para OS {ordem_servico.numero_os}.',
+                'message': f'Ciência registrada com sucesso para OS {
+                    ordem_servico.numero_os}.',
                 'ordem_servico': response_serializer.data
             },
             status=status.HTTP_200_OK
@@ -379,7 +383,9 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         
         if ordem_servico.status != OrdemServico.Status.ABERTA:
             return Response(
-                {"error": f"OS está com status '{ordem_servico.get_status_display()}'. Só pode iniciar trabalho em OS 'Aberta'."},
+                {
+                    "error":
+                        f"OS está com status '{ordem_servico.get_status_display()}'. Só pode iniciar trabalho em OS 'Aberta'."},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -591,3 +597,226 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             )
         
         return gerar_pdf_listagem_ordens_servico(ocorrencia, request)
+    
+    @action(detail=False, methods=['get'], url_path='relatorios-gerenciais')
+    def relatorios_gerenciais(self, request):
+        """
+        Retorna relatórios gerenciais agregados sobre Ordens de Serviço.
+        """
+        
+        # Preparar filtros base
+        filtros = Q(deleted_at__isnull=True)
+        
+        # Filtro de data
+        data_inicio = request.query_params.get('data_inicio')
+        data_fim = request.query_params.get('data_fim')
+        
+        if data_inicio:
+            filtros &= Q(created_at__date__gte=data_inicio)
+        if data_fim:
+            filtros &= Q(created_at__date__lte=data_fim)
+        
+        # Filtro de perito
+        perito_id = request.query_params.get('perito_id')
+        if perito_id:
+            filtros &= Q(ocorrencia__perito_atribuido_id=perito_id)
+        
+        # Filtro de unidade
+        unidade_id = request.query_params.get('unidade_id')
+        if unidade_id:
+            filtros &= Q(unidade_demandante_id=unidade_id)
+        
+        # Filtro de serviço
+        servico_id = request.query_params.get('servico_id')
+        if servico_id:
+            filtros &= Q(ocorrencia__servico_pericial_id=servico_id)
+        
+        # Filtro de status
+        status_param = request.query_params.get('status')
+        if status_param:
+            filtros &= Q(status=status_param)
+        
+        # QuerySet base
+        qs = OrdemServico.objects.filter(filtros)
+        
+        # 1. RESUMO GERAL
+        resumo_geral = {
+            'total_emitidas': qs.count(),
+            'aguardando_ciencia': qs.filter(status='AGUARDANDO_CIENCIA').count(),
+            'abertas': qs.filter(status='ABERTA').count(),
+            'em_andamento': qs.filter(status='EM_ANDAMENTO').count(),
+            'vencidas': qs.filter(status='VENCIDA').count(),
+            'concluidas': qs.filter(status='CONCLUIDA').count(),
+        }
+        
+        # 2. PRODUÇÃO POR PERITO
+        producao_por_perito = qs.values(
+            'ocorrencia__perito_atribuido__nome_completo'
+        ).annotate(
+            total_emitidas=Count('id'),
+            concluidas=Count('id', filter=Q(status='CONCLUIDA')),
+            em_andamento=Count('id', filter=Q(status='EM_ANDAMENTO')),
+            vencidas=Count('id', filter=Q(status='VENCIDA')),
+            aguardando_ciencia=Count('id', filter=Q(status='AGUARDANDO_CIENCIA')),
+        ).order_by('-total_emitidas')
+        
+        producao_detalhada = []
+        for perito in producao_por_perito:
+            perito_nome = perito['ocorrencia__perito_atribuido__nome_completo']
+            
+            os_concluidas = qs.filter(
+                ocorrencia__perito_atribuido__nome_completo=perito_nome,
+                status='CONCLUIDA'
+            )
+            
+            cumpridas_no_prazo = 0
+            cumpridas_com_atraso = 0
+            
+            for os in os_concluidas:
+                if os.concluida_com_atraso:
+                    cumpridas_com_atraso += 1
+                else:
+                    cumpridas_no_prazo += 1
+            
+            producao_detalhada.append({
+                'perito': perito_nome or 'Sem perito',
+                'total_emitidas': perito['total_emitidas'],
+                'concluidas': perito['concluidas'],
+                'cumpridas_no_prazo': cumpridas_no_prazo,
+                'cumpridas_com_atraso': cumpridas_com_atraso,
+                'em_andamento': perito['em_andamento'],
+                'vencidas': perito['vencidas'],
+                'aguardando_ciencia': perito['aguardando_ciencia'],
+                'taxa_cumprimento_prazo': round(
+                    (cumpridas_no_prazo / perito['concluidas'] * 100) if perito['concluidas'] > 0 else 0,
+                    1
+                )
+            })
+        
+        # 3. POR UNIDADE DEMANDANTE
+        por_unidade = qs.values(
+            'unidade_demandante__nome'
+        ).annotate(
+            total=Count('id'),
+            concluidas=Count('id', filter=Q(status='CONCLUIDA')),
+            em_andamento=Count('id', filter=Q(status='EM_ANDAMENTO')),
+            vencidas=Count('id', filter=Q(status='VENCIDA'))
+        ).order_by('-total')
+        
+        # 4. POR SERVIÇO PERICIAL
+        por_servico = qs.values(
+            'ocorrencia__servico_pericial__sigla',
+            'ocorrencia__servico_pericial__nome'
+        ).annotate(
+            total=Count('id'),
+            concluidas=Count('id', filter=Q(status='CONCLUIDA')),
+            em_andamento=Count('id', filter=Q(status='EM_ANDAMENTO')),
+            vencidas=Count('id', filter=Q(status='VENCIDA'))
+        ).order_by('-total')
+        
+        # 5. REITERAÇÕES
+        reiteracoes_stats = {
+            'total_originais': qs.filter(numero_reiteracao=0).count(),
+            'total_reiteracoes': qs.filter(numero_reiteracao__gt=0).count(),
+            'primeira_reiteracao': qs.filter(numero_reiteracao=1).count(),
+            'segunda_reiteracao': qs.filter(numero_reiteracao=2).count(),
+            'terceira_ou_mais': qs.filter(numero_reiteracao__gte=3).count(),
+        }
+        
+        # 6. TAXA DE CUMPRIMENTO
+        os_concluidas_todas = qs.filter(status='CONCLUIDA')
+        total_concluidas = os_concluidas_todas.count()
+        
+        cumpridas_prazo_total = 0
+        cumpridas_atraso_total = 0
+        
+        for os in os_concluidas_todas:
+            if os.concluida_com_atraso:
+                cumpridas_atraso_total += 1
+            else:
+                cumpridas_prazo_total += 1
+        
+        taxa_cumprimento = {
+            'total_concluidas': total_concluidas,
+            'cumpridas_no_prazo': cumpridas_prazo_total,
+            'cumpridas_com_atraso': cumpridas_atraso_total,
+            'percentual_no_prazo': round(
+                (cumpridas_prazo_total / total_concluidas * 100) if total_concluidas > 0 else 0,
+                1
+            ),
+            'percentual_com_atraso': round(
+                (cumpridas_atraso_total / total_concluidas * 100) if total_concluidas > 0 else 0,
+                1
+            )
+        }
+        
+        # 7. PRAZOS MÉDIOS
+        os_com_conclusao = qs.filter(
+            status='CONCLUIDA',
+            data_ciencia__isnull=False,
+            data_conclusao__isnull=False
+        )
+        
+        if os_com_conclusao.exists():
+            tempo_medio = os_com_conclusao.annotate(
+                dias_para_concluir=ExpressionWrapper(
+                    F('data_conclusao') - F('data_ciencia'),
+                    output_field=fields.DurationField()
+                )
+            ).aggregate(
+                media=Avg('dias_para_concluir')
+            )
+            
+            if tempo_medio['media']:
+                dias_medio = tempo_medio['media'].days
+            else:
+                dias_medio = 0
+        else:
+            dias_medio = 0
+        
+        prazos_stats = {
+            'tempo_medio_conclusao_dias': dias_medio,
+            'prazo_medio_concedido': round(qs.aggregate(Avg('prazo_dias'))['prazo_dias__avg'] or 0, 1)
+        }
+        
+        # 8. EVOLUÇÃO TEMPORAL
+        doze_meses_atras = timezone.now() - timedelta(days=365)
+        evolucao_temporal = qs.filter(
+            created_at__gte=doze_meses_atras
+        ).annotate(
+            mes=TruncDate('created_at')
+        ).values('mes').annotate(
+            total=Count('id'),
+            concluidas=Count('id', filter=Q(status='CONCLUIDA'))
+        ).order_by('mes')
+        
+        # RESPOSTA
+        return Response({
+            'resumo_geral': resumo_geral,
+            'producao_por_perito': producao_detalhada,
+            'por_unidade_demandante': list(por_unidade),
+            'por_servico_pericial': list(por_servico),
+            'reiteracoes': reiteracoes_stats,
+            'taxa_cumprimento': taxa_cumprimento,
+            'prazos': prazos_stats,
+            'evolucao_temporal': list(evolucao_temporal)
+        })
+        
+    @action(detail=False, methods=['get'], url_path='relatorios-gerenciais-pdf')
+    def relatorios_gerenciais_pdf(self, request):
+        """Gera PDF dos relatórios gerenciais"""
+        from .pdf_generator import gerar_pdf_relatorios_gerenciais
+        
+        # Obter dados do relatório
+        response_data = self.relatorios_gerenciais(request)
+        dados = response_data.data
+        
+        # Preparar informações de filtros
+        filtros_aplicados = {}
+        if request.query_params.get('data_inicio'):
+            filtros_aplicados['data_inicio'] = request.query_params.get('data_inicio')
+        if request.query_params.get('data_fim'):
+            filtros_aplicados['data_fim'] = request.query_params.get('data_fim')
+        # Adicionar outros filtros conforme necessário
+        
+        return gerar_pdf_relatorios_gerenciais(dados, filtros_aplicados)

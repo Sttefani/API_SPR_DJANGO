@@ -204,7 +204,7 @@ class OrdemServico(AuditModel):
             return None
         
         if self.status == self.Status.CONCLUIDA:
-            return 0
+            return None
         
         delta = self.data_vencimento - timezone.now()
         return delta.days
@@ -248,6 +248,19 @@ class OrdemServico(AuditModel):
             return 'amarelo'   # 3-4 dias
         else:
             return 'verde'     # 5+ dias
+    
+    @property
+    def concluida_com_atraso(self):  # ← ADICIONAR AQUI
+        """
+        Verifica se a OS foi concluída após o prazo de vencimento.
+        """
+        if self.status != self.Status.CONCLUIDA or not self.data_conclusao:
+            return None
+        
+        if not self.data_vencimento:
+            return None
+        
+        return self.data_conclusao > self.data_vencimento
     
     @property
     def percentual_prazo_consumido(self):
