@@ -244,6 +244,6 @@ class HistoricoVinculacao(models.Model):
     class Meta:
         verbose_name = "Histórico de Vinculação"
         verbose_name_plural = "Históricos de Vinculação"
-        ordering = ['-timestamp']
-
-# --- FIM DO NOVO CÓDIGO ---
+        ordering = ['-timestamp']    
+        
+from .endereco_models import EnderecoOcorrencia, TipoOcorrencia

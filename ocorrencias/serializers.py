@@ -10,6 +10,7 @@ from fichas.serializers import (
     FichaLocalCrimeSerializer,
     FichaMaterialDiversoSerializer,
 )
+from ocorrencias.endereco_models import EnderecoOcorrencia
 from usuarios.models import User
 from .models import (
     Ocorrencia,
@@ -32,6 +33,38 @@ from tipos_documento.serializers import TipoDocumentoSerializer
 from exames.serializers import ExameNestedSerializer
 from usuarios.serializers import UserNestedSerializer
 
+
+# ========================================
+# SERIALIZER DE ENDEREÇO
+# ========================================
+
+class EnderecoOcorrenciaSerializer(serializers.ModelSerializer):
+    """Serializer para endereço de ocorrências externas"""
+    
+    endereco_completo = serializers.ReadOnlyField()
+    tem_coordenadas = serializers.ReadOnlyField()
+    
+    class Meta:
+        model = EnderecoOcorrencia
+        fields = [
+            'id',
+            'ocorrencia',
+            'tipo',
+            'logradouro',
+            'numero',
+            'complemento',
+            'bairro',
+            'cep',
+            'latitude',
+            'longitude',
+            'ponto_referencia',
+            'endereco_completo',
+            'tem_coordenadas',
+            'created_at',
+            'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+        
 
 class OcorrenciaListSerializer(serializers.ModelSerializer):
     # ... (código sem alteração)
@@ -77,6 +110,7 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
     unidade_demandante = UnidadeDemandanteSerializer(read_only=True)
     autoridade = AutoridadeSerializer(read_only=True)
     cidade = CidadeSerializer(read_only=True)
+    endereco = EnderecoOcorrenciaSerializer(read_only=True)
     classificacao = ClassificacaoOcorrenciaSerializer(read_only=True)
     procedimento_cadastrado = ProcedimentoCadastradoSerializer(read_only=True)
     tipo_documento_origem = TipoDocumentoSerializer(read_only=True)
@@ -111,7 +145,8 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
             'ficha_local_crime', 'ficha_acidente_transito',
             'ficha_constatacao_substancia', 'ficha_documentoscopia',
-            'ficha_material_diverso'
+            'ficha_material_diverso',
+            'endereco'
         ]
         
     def __init__(self, *args, **kwargs):
@@ -480,3 +515,4 @@ class OcorrenciaCreateSerializer(serializers.ModelSerializer):
         if exames_ids:
             ocorrencia.exames_solicitados.set(exames_ids)
         return ocorrencia
+    

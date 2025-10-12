@@ -5,13 +5,14 @@ from django.utils import timezone
 from django.db.models import Q, Count, F, Case, When, Value
 from django.db.models.functions import Coalesce
 from datetime import timedelta, datetime
+from ocorrencias.endereco_models import EnderecoOcorrencia
 from servicos_periciais.models import ServicoPericial
 from usuarios.models import User
 from classificacoes.models import ClassificacaoOcorrencia
 
 from .models import Ocorrencia
 from .serializers import (
-    OcorrenciaCreateSerializer, OcorrenciaListSerializer, OcorrenciaDetailSerializer,
+    EnderecoOcorrenciaSerializer, OcorrenciaCreateSerializer, OcorrenciaListSerializer, OcorrenciaDetailSerializer,
     OcorrenciaUpdateSerializer, OcorrenciaLixeiraSerializer,
     FinalizarComAssinaturaSerializer, ReabrirOcorrenciaSerializer
 )
@@ -866,3 +867,29 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             return Response({
                 'error': f'Ocorreu um erro inesperado no servidor: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+# ========================================
+# VIEWSET DE ENDEREÇOS
+# ========================================
+
+class EnderecoOcorrenciaViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para gerenciar endereços de ocorrências.
+    Permite criar, atualizar e consultar endereços.
+    """
+    queryset = EnderecoOcorrencia.objects.filter(deleted_at__isnull=True)
+    serializer_class = EnderecoOcorrenciaSerializer
+    permission_classes = [OcorrenciaPermission]
+    
+    def get_queryset(self):
+        """Filtra endereços baseado nas permissões do usuário"""
+        user = self.request.user
+        queryset = self.queryset
+        
+        # Super Admin e Admin veem tudo
+        if user.is_superuser or user.perfil == 'ADMINISTRATIVO':
+            return queryset
+        
+        # Perito vê apenas endereços de suas ocorrências
+        return queryset.filter(ocorrencia__perito_atribuido=user)         
+    
