@@ -10,6 +10,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from movimentacoes.views import MovimentacaoViewSet
 from ordens_servico.views import OrdemServicoViewSet
 # ADICIONADO MyTokenObtainPairView PARA O LOGIN CUSTOMIZADO
+from spr.views import EstatisticasCriminaisView, OcorrenciasGeoView
 from usuarios.views import UserRegistrationViewSet, UserManagementViewSet, MyTokenObtainPairView, ChangePasswordView
 from servicos_periciais.views import ServicoPericialViewSet
 from cidades.views import CidadeViewSet
@@ -112,6 +113,10 @@ urlpatterns = [
     path('api/', include(fichadoc_router.urls)),
     path('api/', include(fichamatdiv_router.urls)),
     path('api/', include(vestigios_router.urls)),
+    
+    # ✅ ANÁLISE CRIMINAL (dentro do path 'api/')
+    path('api/analise-criminal/estatisticas/', EstatisticasCriminaisView.as_view(), name='analise-estatisticas'),
+    path('api/analise-criminal/mapa/', OcorrenciasGeoView.as_view(), name='analise-mapa'),
 
     path('api-auth/', include('rest_framework.urls')),
     path('api/change-password/', ChangePasswordView.as_view(), name='change-password'),  # ← ADICIONE ESTA LINHA

@@ -1,0 +1,16 @@
+asgiref==3.9.1
+charset-normalizer==3.4.3
+Django==5.2.6
+django-cors-headers==4.9.0
+django-filter==25.1
+djangorestframework==3.16.1
+djangorestframework_simplejwt==5.5.1
+drf-nested-routers==0.95.0
+geographiclib==2.1
+geopy==2.4.1
+pillow==11.3.0
+psycopg2-binary==2.9.10
+PyJWT==2.10.1
+reportlab==4.4.4
+sqlparse==0.5.3
+tzdata==2025.2
