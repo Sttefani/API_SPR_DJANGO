@@ -67,6 +67,32 @@ def gerar_pdf_ocorrencia(ocorrencia, request):
         add_linha("Cidade", ocorrencia.cidade.nome)
     if ocorrencia.classificacao: 
         add_linha("Classificação", f"{ocorrencia.classificacao.codigo} - {ocorrencia.classificacao.nome}")
+    # <<< INÍCIO DO NOVO BLOCO PARA O ENDEREÇO >>>
+
+    # Verifica se a ocorrência tem um endereço associado.
+    # O 'hasattr' é uma forma segura de verificar se o atributo existe antes de acessá-lo.
+    if hasattr(ocorrencia, 'endereco') and ocorrencia.endereco:
+        story.append(Paragraph("2.1. ENDEREÇO DO FATO", styles['Subtitulo']))
+        
+        # Adiciona o tipo de ocorrência (Externa/Interna)
+        add_linha("Tipo de Local", ocorrencia.endereco.get_tipo_display())
+
+        # Adiciona os detalhes do endereço apenas se for do tipo EXTERNA
+        if ocorrencia.endereco.tipo == 'EXTERNA':
+            
+            # Usa a propriedade 'endereco_completo' do modelo
+            if ocorrencia.endereco.endereco_completo and ocorrencia.endereco.endereco_completo != 'Endereço não informado':
+                add_linha("Local", ocorrencia.endereco.endereco_completo)
+
+            # Adiciona o ponto de referência se existir
+            if ocorrencia.endereco.ponto_referencia:
+                add_linha("Ponto de Referência", ocorrencia.endereco.ponto_referencia)
+
+            # Adiciona as coordenadas GPS se existirem
+            if ocorrencia.endereco.latitude and ocorrencia.endereco.longitude:
+                add_linha("Coordenadas GPS", f"{ocorrencia.endereco.latitude}, {ocorrencia.endereco.longitude}")
+
+    # <<< FIM DO NOVO BLOCO PARA O ENDEREÇO >>>
 
     story.append(Paragraph("3. HISTÓRICO / OBSERVAÇÕES", styles['Subtitulo']))
     add_paragrafo(ocorrencia.historico or "Não informado.")

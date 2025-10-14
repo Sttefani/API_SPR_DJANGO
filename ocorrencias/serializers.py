@@ -61,7 +61,9 @@ class EnderecoOcorrenciaSerializer(serializers.ModelSerializer):
             'endereco_completo',
             'tem_coordenadas',
             'created_at',
-            'updated_at'
+            'updated_at',
+            'endereco_completo'
+
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
         
