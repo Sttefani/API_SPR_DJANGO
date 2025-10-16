@@ -3,13 +3,7 @@
 from rest_framework import serializers
 from django.utils import timezone
 import datetime
-from fichas.serializers import (
-    FichaAcidenteTransitoSerializer,
-    FichaConstatacaoSubstanciaSerializer,
-    FichaDocumentoscopiaSerializer,
-    FichaLocalCrimeSerializer,
-    FichaMaterialDiversoSerializer,
-)
+
 from ocorrencias.endereco_models import EnderecoOcorrencia
 from usuarios.models import User
 from .models import (
@@ -122,11 +116,6 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
     exames_solicitados = ExameNestedSerializer(many=True, read_only=True)
     finalizada_por = UserNestedSerializer(read_only=True)
     reaberta_por = UserNestedSerializer(read_only=True)
-    ficha_local_crime = FichaLocalCrimeSerializer(read_only=True)
-    ficha_acidente_transito = FichaAcidenteTransitoSerializer(read_only=True)
-    ficha_constatacao_substancia = FichaConstatacaoSubstanciaSerializer(read_only=True)
-    ficha_documentoscopia = FichaDocumentoscopiaSerializer(read_only=True)
-    ficha_material_diverso = FichaMaterialDiversoSerializer(read_only=True)
 
     class Meta:
         model = Ocorrencia
@@ -145,9 +134,6 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
             'ip_assinatura_finalizacao',
             'data_reabertura', 'motivo_reabertura', 'ip_reabertura',
             'created_at', 'updated_at',
-            'ficha_local_crime', 'ficha_acidente_transito',
-            'ficha_constatacao_substancia', 'ficha_documentoscopia',
-            'ficha_material_diverso',
             'endereco'
         ]
         

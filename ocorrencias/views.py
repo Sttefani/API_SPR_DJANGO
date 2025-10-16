@@ -12,7 +12,8 @@ from classificacoes.models import ClassificacaoOcorrencia
 
 from .models import Ocorrencia
 from .serializers import (
-    EnderecoOcorrenciaSerializer, OcorrenciaCreateSerializer, OcorrenciaListSerializer, OcorrenciaDetailSerializer,
+    EnderecoOcorrenciaSerializer, OcorrenciaCreateSerializer,
+    OcorrenciaListSerializer, OcorrenciaDetailSerializer,
     OcorrenciaUpdateSerializer, OcorrenciaLixeiraSerializer,
     FinalizarComAssinaturaSerializer, ReabrirOcorrenciaSerializer
 )
@@ -34,8 +35,8 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         'classificacao', 'classificacao__parent',
         'procedimento_cadastrado__tipo_procedimento',
         'tipo_documento_origem', 'perito_atribuido', 'created_by', 'updated_by',
-        'finalizada_por', 'reaberta_por', 'ficha_local_crime', 'ficha_acidente_transito',
-        'ficha_constatacao_substancia', 'ficha_documentoscopia', 'ficha_material_diverso'
+        'finalizada_por', 'reaberta_por',
+        
     ).prefetch_related('exames_solicitados').all()
     permission_classes = [OcorrenciaPermission]
     filterset_class = OcorrenciaFilter

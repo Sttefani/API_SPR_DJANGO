@@ -56,7 +56,6 @@ INSTALLED_APPS = [
     'procedimentos_cadastrados',
     'ocorrencias',
     'tipos_documento',
-    'fichas', 
     'movimentacoes',
     'ordens_servico'
 
@@ -103,7 +102,8 @@ DATABASES = {
         'USER': 'postgres',   # Seu usuário do PostgreSQL
         'PASSWORD': 'postgres',         # Sua senha de acesso ao banco
         'HOST': 'localhost',             # Mantenha 'localhost' se o banco está na sua máquina
-        'PORT': '5432',                  # A porta padrão do PostgreSQL
+        'PORT': '5432',   
+        'OPTIONS': {'client_encoding': 'UTF8'},
     }
 }
 
