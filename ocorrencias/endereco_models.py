@@ -3,10 +3,13 @@
 from django.db import models
 from django.conf import settings
 from usuarios.models import AuditModel
+import logging
 
 # IMPORTS PARA GEOCODIFICAÇÃO
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+
+logger = logging.getLogger(__name__)
 
 
 class TipoOcorrencia(models.TextChoices):
@@ -42,7 +45,6 @@ class EnderecoOcorrencia(AuditModel):
         verbose_name='Tipo de Ocorrência'
     )
     
-    # ✅ NOVO: Modo de entrada da localização
     modo_entrada = models.CharField(
         max_length=25,
         choices=ModoEntrada.choices,
@@ -50,7 +52,7 @@ class EnderecoOcorrencia(AuditModel):
         verbose_name='Modo de Entrada'
     )
     
-    # Campos de endereço (agora opcionais)
+    # Campos de endereço (opcionais)
     logradouro = models.CharField(max_length=255, blank=True, verbose_name='Logradouro')
     numero = models.CharField(max_length=20, blank=True, verbose_name='Número')
     complemento = models.CharField(max_length=100, blank=True, verbose_name='Complemento')
@@ -61,7 +63,6 @@ class EnderecoOcorrencia(AuditModel):
     latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True, verbose_name='Latitude')
     longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True, verbose_name='Longitude')
     
-    # ✅ NOVO: Flag para indicar origem das coordenadas
     coordenadas_manuais = models.BooleanField(
         default=False,
         verbose_name='Coordenadas Inseridas Manualmente'
@@ -70,60 +71,55 @@ class EnderecoOcorrencia(AuditModel):
     ponto_referencia = models.CharField(max_length=255, blank=True, verbose_name='Ponto de Referência')
     
     # ==========================================
-    # ✅ MÉTODO SAVE ATUALIZADO
+    # ✅ MÉTODO SAVE OTIMIZADO - SEM GEOCODIFICAÇÃO
     # ==========================================
     
     def save(self, *args, **kwargs):
         """
-        ✅ NOVA LÓGICA:
-        - Se modo_entrada = COORDENADAS_DIRETAS: NUNCA geocodifica
-        - Se coordenadas_manuais = True: NUNCA sobrescreve
-        - Só geocodifica se modo_entrada = ENDERECO_CONVENCIONAL e não tem coordenadas
+        ✅ SEGURO: Geocodificação REMOVIDA para não travar o save()
+        
+        Para geocodificar endereços, use:
+        - Management command: python manage.py geocodificar_enderecos
+        - Ou chame manualmente: endereco.geocodificar_async()
         """
         
-        # Se usuário escolheu coordenadas diretas, respeitar e não geocodificar
+        # Se usuário escolheu coordenadas diretas, marca como manual
         if self.modo_entrada == ModoEntrada.COORDENADAS_DIRETAS:
             self.coordenadas_manuais = True
-            super().save(*args, **kwargs)
-            return
         
-        # Se coordenadas foram inseridas manualmente, NUNCA sobrescrever
-        if self.coordenadas_manuais:
-            super().save(*args, **kwargs)
-            return
-        
-        # Geocodificar apenas se:
-        # 1. Modo endereço convencional
-        # 2. Não tem coordenadas
-        # 3. É externa
-        # 4. Tem dados de endereço
-        precisa_geocodificar = (
-            self.modo_entrada == ModoEntrada.ENDERECO_CONVENCIONAL and
-            (not self.latitude or not self.longitude) and
-            not self.coordenadas_manuais and
-            self.tipo == TipoOcorrencia.EXTERNA and
-            self.logradouro and
-            self.ocorrencia and
-            self.ocorrencia.cidade
-        )
-        
-        if precisa_geocodificar:
-            print(f"🔍 [ID:{self.ocorrencia.id}] Tentando geocodificar: {self.logradouro}")
-            try:
-                self.geocodificar()
-            except Exception as e:
-                print(f"❌ Erro ao geocodificar: {e}")
-        
+        # Apenas salva - SEM chamar API externa
         super().save(*args, **kwargs)
     
-    def geocodificar(self):
+    # ==========================================
+    # ✅ MÉTODO DE GEOCODIFICAÇÃO SEPARADO E SEGURO
+    # ==========================================
+    
+    def geocodificar_async(self):
         """
-        ✅ MODIFICADO: Não usa mais fallback para centro da cidade
-        Converte endereço em coordenadas usando Nominatim (OpenStreetMap).
+        ✅ SEGURO: Geocodifica SEM bloquear o save()
+        
+        Este método deve ser chamado separadamente via:
+        - Management command (para processar vários endereços)
+        - Endpoint específico (para processar um endereço)
+        - Task assíncrona (Celery, se configurado)
         
         Returns:
-            bool: True se encontrou coordenadas, False se não encontrou
+            bool: True se encontrou coordenadas, False caso contrário
         """
+        
+        # Validações
+        if self.tipo != TipoOcorrencia.EXTERNA:
+            logger.warning(f"Endereço ID {self.id} não é externo. Geocodificação ignorada.")
+            return False
+        
+        if self.coordenadas_manuais:
+            logger.warning(f"Endereço ID {self.id} possui coordenadas manuais. Geocodificação ignorada.")
+            return False
+        
+        if not self.logradouro:
+            logger.warning(f"Endereço ID {self.id} não possui logradouro. Geocodificação impossível.")
+            return False
+        
         try:
             geolocator = Nominatim(
                 user_agent="spr_roraima_pericia_v1",
@@ -149,7 +145,7 @@ class EnderecoOcorrencia(AuditModel):
             
             endereco_completo = ', '.join(partes_endereco)
             
-            print(f"📍 Buscando: {endereco_completo}")
+            logger.info(f"📍 Geocodificando ID {self.id}: {endereco_completo}")
             
             location = geolocator.geocode(
                 endereco_completo,
@@ -160,24 +156,24 @@ class EnderecoOcorrencia(AuditModel):
             if location:
                 self.latitude = str(location.latitude)
                 self.longitude = str(location.longitude)
-                self.coordenadas_manuais = False  # Marcando como geocodificado automaticamente
-                print(f"✅ Coordenadas encontradas: {self.latitude}, {self.longitude}")
+                self.coordenadas_manuais = False
+                self.save(update_fields=['latitude', 'longitude', 'coordenadas_manuais', 'updated_at'])
+                logger.info(f"✅ Coordenadas salvas para ID {self.id}: {self.latitude}, {self.longitude}")
                 return True
             else:
-                # ✅ REMOVIDO: Não usa mais fallback para centro da cidade
-                print(f"⚠️  Endereço não encontrado. Coordenadas não serão preenchidas.")
+                logger.warning(f"⚠️ Endereço não encontrado para ID {self.id}: {endereco_completo}")
                 return False
         
         except GeocoderTimedOut:
-            print(f"⏱️  Timeout ao geocodificar")
+            logger.error(f"⏱️ Timeout ao geocodificar ID {self.id}")
             return False
         
         except GeocoderServiceError as e:
-            print(f"🌐 Erro de serviço: {e}")
+            logger.error(f"🌐 Erro de serviço ao geocodificar ID {self.id}: {e}")
             return False
         
         except Exception as e:
-            print(f"❌ Erro inesperado: {e}")
+            logger.error(f"❌ Erro inesperado ao geocodificar ID {self.id}: {e}")
             return False
     
     # ==========================================

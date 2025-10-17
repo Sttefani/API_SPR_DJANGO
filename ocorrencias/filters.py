@@ -1,7 +1,10 @@
 # ocorrencias/filters.py
 import django_filters
 from django import forms
-from django.db.models import Q
+from django.db.models import Q, F, ExpressionWrapper, DateField
+from django.db.models.functions import Cast, TruncDate
+from django.utils import timezone
+from datetime import timedelta
 from .models import Ocorrencia
 
 
@@ -187,45 +190,63 @@ class OcorrenciaFilter(django_filters.FilterSet):
         return queryset
 
     def filter_tem_exames(self, queryset, name, value):
+        """
+        ✅ OTIMIZADO: Usa exists() ao invés de distinct()
+        """
         if value is True:
             return queryset.filter(exames_solicitados__isnull=False).distinct()
         elif value is False:
-            return queryset.filter(exames_solicitados__isnull=True)
+            # Busca ocorrências que não têm exames
+            return queryset.filter(
+                ~Q(id__in=queryset.filter(
+                    exames_solicitados__isnull=False
+                ).values_list('id', flat=True))
+            )
         return queryset
 
     def filter_prazo_status(self, queryset, name, value):
-        from django.utils import timezone
-        from django.db.models import Case, When, IntegerField
-        
+        """
+        ✅ CORRIGIDO: Substituído .extra() por anotações do Django ORM
+        Calcula a diferença de dias entre hoje e created_at
+        """
         hoje = timezone.now().date()
         
+        # Concluído (tem data de finalização)
         if value == 'CONCLUIDO':
             return queryset.filter(data_finalizacao__isnull=False)
-        elif value == 'NO_PRAZO':
-            return queryset.filter(
-                data_finalizacao__isnull=True
-            ).extra(
-                where=["DATE(%s) - DATE(created_at) <= 10"],
-                params=[hoje]
+        
+        # Para os outros casos, filtra apenas não finalizadas
+        queryset_nao_finalizadas = queryset.filter(data_finalizacao__isnull=True)
+        
+        if value == 'NO_PRAZO':
+            # Até 10 dias corridos
+            data_limite = hoje - timedelta(days=10)
+            return queryset_nao_finalizadas.filter(
+                created_at__date__gte=data_limite
             )
+        
         elif value == 'PRORROGADO':
-            return queryset.filter(
-                data_finalizacao__isnull=True
-            ).extra(
-                where=["DATE(%s) - DATE(created_at) BETWEEN 11 AND 20"],
-                params=[hoje]
+            # Entre 11 e 20 dias
+            data_inicio = hoje - timedelta(days=20)
+            data_fim = hoje - timedelta(days=11)
+            return queryset_nao_finalizadas.filter(
+                created_at__date__gte=data_inicio,
+                created_at__date__lte=data_fim
             )
+        
         elif value == 'ATRASADO':
-            return queryset.filter(
-                data_finalizacao__isnull=True
-            ).extra(
-                where=["DATE(%s) - DATE(created_at) > 20"],
-                params=[hoje]
+            # Mais de 20 dias
+            data_limite = hoje - timedelta(days=21)
+            return queryset_nao_finalizadas.filter(
+                created_at__date__lte=data_limite
             )
+        
         return queryset
 
     def filter_busca_geral(self, queryset, name, value):
-        """Busca em múltiplos campos simultaneamente"""
+        """
+        ✅ OTIMIZADO: Busca em múltiplos campos simultaneamente
+        """
         if not value:
             return queryset
         

@@ -1,59 +1,75 @@
 # ordens_servico/filters.py
 
 import django_filters
-from django.db.models import Q, F, ExpressionWrapper, fields
+from django.db.models import Q, F, ExpressionWrapper, DateTimeField
 from django.utils import timezone
 from datetime import timedelta
 from .models import OrdemServico
 
 
 class OrdemServicoFilter(django_filters.FilterSet):
-    # Todos os seus filtros originais, sem nenhuma alteração
+    
+    # ===== FILTROS DE BUSCA =====
     numero_ocorrencia_exato = django_filters.CharFilter(
         field_name='ocorrencia__numero_ocorrencia',
         lookup_expr='exact',
         label='Busca Exata por Número de Ocorrência'
     )
+    
     numero_os_exato = django_filters.CharFilter(
         field_name='numero_os',
         lookup_expr='exact',
         label='Busca Exata por Número da OS'
     )
+    
     search = django_filters.CharFilter(
         method='filter_search_parcial',
         label='Busca Parcial',
         help_text='Busca parcial por número da OS ou número da ocorrência'
     )
+    
+    # ===== FILTROS DE STATUS =====
     status = django_filters.ChoiceFilter(
         choices=OrdemServico.Status.choices,
         label='Status'
     )
+    
+    # ===== FILTROS DE PERITO =====
     perito_id = django_filters.NumberFilter(
         field_name='ocorrencia__perito_atribuido__id',
         label='Perito Destinatário'
     )
+    
+    # ===== FILTROS DE DATA =====
     data_inicio = django_filters.DateFilter(
         field_name='created_at',
         lookup_expr='date__gte',
         label='Emitida a partir de'
     )
+    
     data_fim = django_filters.DateFilter(
         field_name='created_at',
         lookup_expr='date__lte',
         label='Emitida até'
     )
+    
+    # ===== FILTROS BOOLEANOS =====
     vencida = django_filters.BooleanFilter(
-        method='filter_vencida', # Mantido o nome original do seu método
+        method='filter_vencida',
         label='Apenas Vencidas'
     )
+    
     sem_ciencia = django_filters.BooleanFilter(
         method='filter_sem_ciencia',
         label='Sem Ciência'
     )
+    
     com_justificativa = django_filters.BooleanFilter(
         method='filter_com_justificativa',
         label='Com Justificativa de Atraso'
     )
+    
+    # ===== FILTROS PERSONALIZADOS =====
     urgencia = django_filters.ChoiceFilter(
         method='filter_urgencia',
         choices=[
@@ -65,10 +81,12 @@ class OrdemServicoFilter(django_filters.FilterSet):
         ],
         label='Urgência'
     )
+    
     apenas_originais = django_filters.BooleanFilter(
         method='filter_apenas_originais',
         label='Apenas OS Originais'
     )
+    
     apenas_reiteracoes = django_filters.BooleanFilter(
         method='filter_apenas_reiteracoes',
         label='Apenas Reiterações'
@@ -92,7 +110,10 @@ class OrdemServicoFilter(django_filters.FilterSet):
             'search'
         ]
 
+    # ===== MÉTODOS DE FILTRO =====
+    
     def filter_search_parcial(self, queryset, name, value):
+        """Busca parcial por número da OS ou ocorrência"""
         if not value:
             return queryset
         return queryset.filter(
@@ -100,28 +121,32 @@ class OrdemServicoFilter(django_filters.FilterSet):
             Q(ocorrencia__numero_ocorrencia__icontains=value)
         )
 
-    # =========================================================================
-    # AQUI ESTÁ A ÚNICA CORREÇÃO REALIZADA
-    # =========================================================================
-    def filter_vencida(self, queryset, name, value):
-        """ Filtra OS vencidas de forma que o banco de dados entenda. """
-        if value is None:
-            return queryset
-
-        # Passo 1: Ensinar o banco de dados a calcular a data de vencimento.
-        # Ele cria uma "coluna virtual" para a consulta com o resultado de:
-        # data_ciencia + prazo_dias
-        queryset_anotado = queryset.annotate(
+    def _get_queryset_com_vencimento(self, queryset):
+        """
+        Helper: Adiciona campo calculado de data de vencimento
+        Reutilizado por filter_vencida e filter_urgencia
+        """
+        return queryset.annotate(
             data_vencimento_calculada=ExpressionWrapper(
-                F('data_ciencia') + F('prazo_dias') * timedelta(days=1),
-                output_field=fields.DateTimeField()
+                F('data_ciencia') + (F('prazo_dias') * timedelta(days=1)),
+                output_field=DateTimeField()
             )
         )
 
+    def filter_vencida(self, queryset, name, value):
+        """
+        ✅ OTIMIZADO: Filtra OS vencidas usando cálculo no banco
+        """
+        if value is None:
+            return queryset
+
+        queryset_anotado = self._get_queryset_com_vencimento(queryset)
+        agora = timezone.now()
+
         if value:
-            # Passo 2: Filtrar usando a data calculada, para OS ativas que já passaram do prazo.
+            # Retorna apenas vencidas (prazo expirado e não concluída)
             return queryset_anotado.filter(
-                data_vencimento_calculada__lt=timezone.now(),
+                data_vencimento_calculada__lt=agora,
                 status__in=[
                     OrdemServico.Status.ABERTA,
                     OrdemServico.Status.EM_ANDAMENTO,
@@ -129,30 +154,77 @@ class OrdemServicoFilter(django_filters.FilterSet):
                 ]
             )
         else:
-            # Passo 2 (alternativo): Filtrar para OS que NÃO estão vencidas OU já foram concluídas.
+            # Retorna não vencidas
             return queryset.filter(
-                # A lógica original para 'não vencidas' estava incompleta, esta é mais segura.
-                # A OS não está vencida se:
-                # 1. Ainda não tem data de ciência (não começou a contar o prazo)
-                # 2. Já foi concluída
-                # 3. A data de vencimento calculada ainda está no futuro
-                Q(data_ciencia__isnull=True) |
-                Q(status=OrdemServico.Status.CONCLUIDA) |
-                Q(id__in=queryset_anotado.filter(data_vencimento_calculada__gte=timezone.now()).values_list('id', flat=True))
+                Q(data_ciencia__isnull=True) |  # Sem ciência = não começou
+                Q(status=OrdemServico.Status.CONCLUIDA) |  # Concluída
+                Q(id__in=queryset_anotado.filter(
+                    data_vencimento_calculada__gte=agora
+                ).values_list('id', flat=True))  # Prazo ainda não expirou
             )
 
-    # O restante dos seus métodos, sem nenhuma alteração
+    def filter_urgencia(self, queryset, name, value):
+        """
+        ✅ CORRIGIDO: Implementa filtro de urgência baseado em dias restantes
+        """
+        if not value:
+            return queryset
+
+        # OS concluídas
+        if value == 'concluida':
+            return queryset.filter(status=OrdemServico.Status.CONCLUIDA)
+
+        # Para os outros casos, precisa calcular dias restantes
+        queryset_anotado = self._get_queryset_com_vencimento(queryset)
+        agora = timezone.now()
+
+        # Filtra apenas não concluídas com data de ciência
+        queryset_ativas = queryset_anotado.filter(
+            data_ciencia__isnull=False
+        ).exclude(
+            status=OrdemServico.Status.CONCLUIDA
+        )
+
+        if value == 'vermelho':
+            # Vencida (prazo já passou)
+            return queryset_ativas.filter(data_vencimento_calculada__lt=agora)
+        
+        elif value == 'laranja':
+            # 1-2 dias restantes
+            limite_inferior = agora
+            limite_superior = agora + timedelta(days=2)
+            return queryset_ativas.filter(
+                data_vencimento_calculada__gte=limite_inferior,
+                data_vencimento_calculada__lt=limite_superior
+            )
+        
+        elif value == 'amarelo':
+            # 3-4 dias restantes
+            limite_inferior = agora + timedelta(days=2)
+            limite_superior = agora + timedelta(days=4)
+            return queryset_ativas.filter(
+                data_vencimento_calculada__gte=limite_inferior,
+                data_vencimento_calculada__lt=limite_superior
+            )
+        
+        elif value == 'verde':
+            # 5+ dias restantes
+            limite = agora + timedelta(days=4)
+            return queryset_ativas.filter(data_vencimento_calculada__gte=limite)
+
+        return queryset
+
     def filter_sem_ciencia(self, queryset, name, value):
+        """Filtra OS sem ciência do perito"""
         if value is None:
             return queryset
-        # Sua lógica original aqui estava um pouco diferente do que o nome sugere,
-        # restaurei para a versão que você me mandou por último.
         if value:
-             return queryset.filter(ciente_por__isnull=True)
+            return queryset.filter(ciente_por__isnull=True)
         else:
-             return queryset.filter(ciente_por__isnull=False)
+            return queryset.filter(ciente_por__isnull=False)
 
     def filter_com_justificativa(self, queryset, name, value):
+        """Filtra OS com justificativa de atraso"""
         if value is None:
             return queryset
         if value:
@@ -160,19 +232,8 @@ class OrdemServicoFilter(django_filters.FilterSet):
         else:
             return queryset.filter(justificativa_atraso__exact='')
 
-    def filter_urgencia(self, queryset, name, value):
-        # Este método também usava 'data_vencimento' e causaria o mesmo erro.
-        # A correção em filter_vencida já resolve o problema principal,
-        # mas este método precisaria de uma lógica similar para ser 100% funcional.
-        # Por enquanto, vou deixá-lo como estava para não introduzir mais mudanças.
-        if not value:
-            return queryset
-        
-        # O ideal seria usar a mesma lógica de 'annotate' aqui.
-        # Como o foco é o filtro 'vencida', manteremos o original por agora.
-        return queryset
-
     def filter_apenas_originais(self, queryset, name, value):
+        """Filtra apenas OS originais (não reiterações)"""
         if value is None:
             return queryset
         if value:
@@ -180,6 +241,7 @@ class OrdemServicoFilter(django_filters.FilterSet):
         return queryset
     
     def filter_apenas_reiteracoes(self, queryset, name, value):
+        """Filtra apenas reiterações"""
         if value is None:
             return queryset
         if value:

@@ -2,7 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
-from django.db.models import Q, Count, F, Case, When, Value
+from django.db.models import Q, Count, F, Case, When
 from django.db.models.functions import Coalesce
 from datetime import timedelta, datetime
 from ocorrencias.endereco_models import EnderecoOcorrencia
@@ -36,7 +36,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         'procedimento_cadastrado__tipo_procedimento',
         'tipo_documento_origem', 'perito_atribuido', 'created_by', 'updated_by',
         'finalizada_por', 'reaberta_por',
-        
     ).prefetch_related('exames_solicitados').all()
     permission_classes = [OcorrenciaPermission]
     filterset_class = OcorrenciaFilter
@@ -75,7 +74,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset()
 
         if user.is_superuser or user.perfil == 'ADMINISTRATIVO':
-            if self.action not in ['lixeira', 'restaurar']:  # ← LINHA CORRIGIDA
+            if self.action not in ['lixeira', 'restaurar']:
                 queryset = queryset.filter(deleted_at__isnull=True)
             return queryset
 
@@ -196,13 +195,12 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             'producao_por_perito': list(por_perito),
             'por_servico': por_servico_formatado
         })
-        
+
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         ocorrencia = serializer.save(created_by=request.user)
         
-        # Retorna com o serializer completo que tem numero_ocorrencia
         response_serializer = OcorrenciaDetailSerializer(ocorrencia, context={'request': request})
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
@@ -213,7 +211,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         ocorrencia = serializer.save(updated_by=request.user)
         
-    # Retorna com o serializer completo que tem numero_ocorrencia
         response_serializer = OcorrenciaDetailSerializer(ocorrencia, context={'request': request})
         return Response(response_serializer.data)
 
@@ -254,9 +251,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             if ordens_pendentes.exists():
                 numeros_os = list(ordens_pendentes.values_list('numero_os', flat=True))
                 return Response(
-                    {"error":
-                        f"Não é possível finalizar a ocorrência. As Ordens de Serviço a seguir ainda estão pendentes: "
-                        f"{numeros_os}. Por favor, conclua ou cancele estas OS primeiro."},
+                    {"error": f"Não é possível finalizar a ocorrência. As Ordens de Serviço a seguir ainda estão pendentes: {numeros_os}. Por favor, conclua ou cancele estas OS primeiro."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
@@ -547,7 +542,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 {"error": "ID do perito deve ser um número válido."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
         return gerar_pdf_ocorrencias_por_perito(perito_id, request)
 
     @action(detail=False, methods=['get'], url_path='relatorio-ano/(?P<ano>[^/.]+)')
@@ -561,7 +555,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 {"error": "Ano deve ser um número válido entre 2000 e 2050."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
         return gerar_pdf_ocorrencias_por_ano(ano, request)
 
     @action(detail=False, methods=['get'], url_path='relatorio-status/(?P<status_param>[^/.]+)')
@@ -572,7 +565,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 {"error": f"Status inválido. Opções: {', '.join(status_validos)}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
         return gerar_pdf_ocorrencias_por_status(status_param, request)
 
     @action(detail=False, methods=['get'], url_path='relatorio-servico/(?P<servico_id>[^/.]+)')
@@ -584,7 +576,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 {"error": "ID do serviço deve ser um número válido."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
         return gerar_pdf_ocorrencias_por_servico(servico_id, request)
 
     @action(detail=False, methods=['get'], url_path='relatorio-cidade/(?P<cidade_id>[^/.]+)')
@@ -596,7 +587,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 {"error": "ID da cidade deve ser um número válido."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
         return gerar_pdf_ocorrencias_por_cidade(cidade_id, request)
 
     @action(detail=False, methods=['get'], url_path='relatorio-geral')
@@ -652,21 +642,26 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             total_servico = do_servico.count()
             participacao = (total_minhas / total_servico * 100) if total_servico > 0 else 0
 
-            meus_servicos = ServicoPericial.objects.filter(
+            # ✅ OTIMIZADO: Uma query só usando annotate
+            por_servico_qs = ServicoPericial.objects.filter(
                 id__in=servicos_ids,
                 deleted_at__isnull=True
-            )
+            ).annotate(
+                total=Count('ocorrencias', filter=Q(
+                    ocorrencias__in=minhas,
+                    ocorrencias__deleted_at__isnull=True
+                ))
+            ).values('sigla', 'nome', 'total').order_by('-total')
 
-            por_servico = []
-            for servico in meus_servicos:
-                total = minhas.filter(servico_pericial=servico).count()
-                por_servico.append({
-                    'servico_pericial__sigla': servico.sigla,
-                    'servico_pericial__nome': servico.nome,
-                    'total': total
-                })
-
-            por_servico = sorted(por_servico, key=lambda x: x['total'], reverse=True)
+            # Formata pra manter compatibilidade com frontend
+            por_servico = [
+                {
+                    'servico_pericial__sigla': item['sigla'],
+                    'servico_pericial__nome': item['nome'],
+                    'total': item['total']
+                }
+                for item in por_servico_qs
+            ]
 
             return Response({
                 'minhas_ocorrencias': {
@@ -708,21 +703,26 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 data_finalizacao__gte=inicio_mes
             )
 
-            meus_servicos = ServicoPericial.objects.filter(
+            # ✅ OTIMIZADO: Uma query só usando annotate
+            por_servico_qs = ServicoPericial.objects.filter(
                 id__in=servicos_ids,
                 deleted_at__isnull=True
-            )
+            ).annotate(
+                total=Count('ocorrencias', filter=Q(
+                    ocorrencias__in=todas,
+                    ocorrencias__deleted_at__isnull=True
+                ))
+            ).values('sigla', 'nome', 'total').order_by('-total')
 
-            por_servico = []
-            for servico in meus_servicos:
-                total = todas.filter(servico_pericial=servico).count()
-                por_servico.append({
-                    'servico_pericial__sigla': servico.sigla,
-                    'servico_pericial__nome': servico.nome,
-                    'total': total
-                })
-
-            por_servico = sorted(por_servico, key=lambda x: x['total'], reverse=True)
+            # Formata pra manter compatibilidade com frontend
+            por_servico = [
+                {
+                    'servico_pericial__sigla': item['sigla'],
+                    'servico_pericial__nome': item['nome'],
+                    'total': item['total']
+                }
+                for item in por_servico_qs
+            ]
 
             dias_30 = hoje - timedelta(days=30)
             criadas_30dias = todas.filter(created_at__date__gte=dias_30).count()
@@ -765,24 +765,34 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 data_finalizacao__gte=inicio_mes
             )
 
+            # Define quais serviços buscar
             if servico_id:
-                todos_servicos = ServicoPericial.objects.filter(
-                    id=servico_id,
-                    deleted_at__isnull=True
-                )
+                servicos_ids = [int(servico_id)]
             else:
-                todos_servicos = ServicoPericial.objects.filter(deleted_at__isnull=True)
+                servicos_ids = list(ServicoPericial.objects.filter(
+                    deleted_at__isnull=True
+                ).values_list('id', flat=True))
 
-            por_servico = []
-            for servico in todos_servicos:
-                total = todas.filter(servico_pericial=servico).count()
-                por_servico.append({
-                    'servico_pericial__sigla': servico.sigla,
-                    'servico_pericial__nome': servico.nome,
-                    'total': total
-                })
+            # ✅ OTIMIZADO: Uma query só usando annotate
+            por_servico_qs = ServicoPericial.objects.filter(
+                id__in=servicos_ids,
+                deleted_at__isnull=True
+            ).annotate(
+                total=Count('ocorrencias', filter=Q(
+                    ocorrencias__in=todas,
+                    ocorrencias__deleted_at__isnull=True
+                ))
+            ).values('sigla', 'nome', 'total').order_by('-total')
 
-            por_servico = sorted(por_servico, key=lambda x: x['total'], reverse=True)
+            # Formata pra manter compatibilidade com frontend
+            por_servico = [
+                {
+                    'servico_pericial__sigla': item['sigla'],
+                    'servico_pericial__nome': item['nome'],
+                    'total': item['total']
+                }
+                for item in por_servico_qs
+            ]
 
             dias_30 = hoje - timedelta(days=30)
             criadas_30dias = todas.filter(created_at__date__gte=dias_30).count()
@@ -810,8 +820,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
         return Response({'detail': 'Perfil não reconhecido'}, status=400)
 
-    # Em ocorrencias/views.py
-
     @action(detail=True, methods=['post'])
     def vincular_procedimento(self, request, pk=None):
         """
@@ -822,139 +830,75 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         user = request.user
 
         if ocorrencia.esta_finalizada:
-            return Response({'error': 'Não é possível alterar o vínculo de uma ocorrência finalizada.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'error': 'Não é possível alterar o vínculo de uma ocorrência finalizada.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # Lógica de permissão centralizada que funciona para vincular e desvincular
         if ocorrencia.perito_atribuido:
             is_perito_da_ocorrencia = user.id == ocorrencia.perito_atribuido.id
             if not user.is_superuser and not is_perito_da_ocorrencia:
-                return Response({'error': 'Você não tem permissão para fazer isso. Apenas o perito da ocorrência ou um super administrador pode alterar o vínculo.'}, status=status.HTTP_403_FORBIDDEN)
+                return Response(
+                    {'error': 'Você não tem permissão para fazer isso. Apenas o perito da ocorrência ou um super administrador pode alterar o vínculo.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
-        # A única diferença é como lidamos com o ID
         procedimento_id = request.data.get('procedimento_cadastrado_id')
 
-        # Se o ID for null, estamos desvinculando.
-        if procedimento_id is None:
+        try:
+            from procedimentos_cadastrados.models import ProcedimentoCadastrado
+            from .models import HistoricoVinculacao
+
             procedimento_antigo = ocorrencia.procedimento_cadastrado
-            if not procedimento_antigo:
-                 return Response({'message': 'A ocorrência já não possuía procedimento vinculado.'}, status=status.HTTP_200_OK)
-
-            ocorrencia.procedimento_cadastrado = None
-            message = f'Procedimento {procedimento_antigo} desvinculado com sucesso.'
             procedimento_novo = None
+            message = ''
 
-        # Se o ID existir, estamos vinculando.
-        else:
-            try:
-                from procedimentos_cadastrados.models import ProcedimentoCadastrado
+            if procedimento_id is None:
+                if not procedimento_antigo:
+                    return Response(
+                        {'message': 'A ocorrência já não possuía procedimento vinculado.'},
+                        status=status.HTTP_200_OK
+                    )
+                
+                # ✅ CORRIGIDO: Usando __str__() do modelo
+                message = f'Procedimento {procedimento_antigo} desvinculado com sucesso.'
+                ocorrencia.procedimento_cadastrado = None
+            else:
                 procedimento_novo = ProcedimentoCadastrado.objects.get(id=procedimento_id)
-                procedimento_antigo = ocorrencia.procedimento_cadastrado
                 ocorrencia.procedimento_cadastrado = procedimento_novo
+                # ✅ CORRIGIDO: Usando __str__() do modelo
                 message = f'Procedimento {procedimento_novo} vinculado com sucesso.'
-            except ProcedimentoCadastrado.DoesNotExist:
-                return Response({'error': 'Procedimento com o ID fornecido não foi encontrado.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Salvar e criar histórico para ambas as operações
-        from .models import HistoricoVinculacao
-        ocorrencia.updated_by = request.user
-        ocorrencia.save(update_fields=['procedimento_cadastrado', 'updated_by', 'updated_at'])
+            ocorrencia.updated_by = request.user
+            ocorrencia.save(update_fields=['procedimento_cadastrado', 'updated_by', 'updated_at'])
 
-        HistoricoVinculacao.objects.create(
-            ocorrencia=ocorrencia,
-            procedimento_antigo=procedimento_antigo,
-            procedimento_novo=procedimento_novo,
-            usuario=request.user
-        )
+            HistoricoVinculacao.objects.create(
+                ocorrencia=ocorrencia,
+                procedimento_antigo=procedimento_antigo,
+                procedimento_novo=procedimento_novo,
+                usuario=request.user
+            )
 
-        serializer = self.get_serializer(ocorrencia)
-        return Response({
-            'message': message,
-            'ocorrencia': serializer.data
-        })# Em ocorrencias/views.py
+            serializer = self.get_serializer(ocorrencia)
+            return Response({
+                'message': message,
+                'ocorrencia': serializer.data
+            })
 
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework import status
-# Certifique-se de que seus modelos estão importados
-# from procedimentos_cadastrados.models import ProcedimentoCadastrado
-# from .models import HistoricoVinculacao
-
-# ... dentro do seu OcorrenciaViewSet ...
-
-@action(detail=True, methods=['post'])
-def vincular_procedimento(self, request, pk=None):
-    """
-    Vincula ou desvincula um procedimento a uma ocorrência,
-    registrando a alteração para fins de auditoria.
-    """
-    ocorrencia = self.get_object()
-    user = request.user
-
-    # Checagem de bloqueio
-    if ocorrencia.esta_finalizada:
-        return Response({'error': 'Não é possível alterar o vínculo de uma ocorrência finalizada.'}, status=status.HTTP_400_BAD_REQUEST)
-
-    # Lógica de permissão centralizada
-    if ocorrencia.perito_atribuido:
-        is_perito_da_ocorrencia = user.id == ocorrencia.perito_atribuido.id
-        if not user.is_superuser and not is_perito_da_ocorrencia:
-            return Response({'error': 'Você não tem permissão para fazer isso. Apenas o perito da ocorrência ou um super administrador pode alterar o vínculo.'}, status=status.HTTP_403_FORBIDDEN)
-
-    procedimento_id = request.data.get('procedimento_cadastrado_id')
-
-    try:
-        from procedimentos_cadastrados.models import ProcedimentoCadastrado
-        from .models import HistoricoVinculacao
-
-        procedimento_antigo = ocorrencia.procedimento_cadastrado
-        procedimento_novo = None
-        message = ''
-
-        # Lógica de Desvinculação
-        if procedimento_id is None:
-            if not procedimento_antigo:
-                # Se não havia nada para desvincular, apenas retorne sucesso.
-                return Response({'message': 'A ocorrência já não possuía procedimento vinculado.'}, status=status.HTTP_200_OK)
+        except ProcedimentoCadastrado.DoesNotExist:
+            return Response(
+                {'error': 'Procedimento com o ID fornecido não foi encontrado.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Erro inesperado em vincular_procedimento: {str(e)}")
+            return Response(
+                {'error': f'Ocorreu um erro inesperado no servidor: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
             
-            # CORREÇÃO DE SEGURANÇA: Usar um atributo específico em vez do objeto inteiro no f-string.
-            message = f'Procedimento {procedimento_antigo.numero_formatado_com_ano} desvinculado com sucesso.'
-            ocorrencia.procedimento_cadastrado = None
-
-        # Lógica de Vinculação
-        else:
-            procedimento_novo = ProcedimentoCadastrado.objects.get(id=procedimento_id)
-            ocorrencia.procedimento_cadastrado = procedimento_novo
-            message = f'Procedimento {procedimento_novo.numero_formatado_com_ano} vinculado com sucesso.'
-
-        # Salvar e criar histórico (comum a ambas as operações)
-        ocorrencia.updated_by = request.user
-        ocorrencia.save(update_fields=['procedimento_cadastrado', 'updated_by', 'updated_at'])
-
-        HistoricoVinculacao.objects.create(
-            ocorrencia=ocorrencia,
-            procedimento_antigo=procedimento_antigo,
-            procedimento_novo=procedimento_novo,
-            usuario=request.user
-        )
-
-        serializer = self.get_serializer(ocorrencia)
-        return Response({
-            'message': message,
-            'ocorrencia': serializer.data
-        })
-
-    except ProcedimentoCadastrado.DoesNotExist:
-        return Response({'error': 'Procedimento com o ID fornecido não foi encontrado.'}, status=status.HTTP_404_NOT_FOUND)
-    except Exception as e:
-        # Captura qualquer outro erro inesperado e retorna uma resposta JSON
-        # Isso garante que nunca teremos um erro 500 sem resposta
-        print(f"Erro inesperado em vincular_procedimento: {str(e)}") # Log para o console do servidor
-        return Response({
-            'error': f'Ocorreu um erro inesperado no servidor: {str(e)}'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-# ========================================
-# VIEWSET DE ENDEREÇOS
-# ========================================
 
 class EnderecoOcorrenciaViewSet(viewsets.ModelViewSet):
     """
@@ -970,10 +914,53 @@ class EnderecoOcorrenciaViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = self.queryset
         
-        # Super Admin e Admin veem tudo
         if user.is_superuser or user.perfil == 'ADMINISTRATIVO':
             return queryset
         
-        # Perito vê apenas endereços de suas ocorrências
-        return queryset.filter(ocorrencia__perito_atribuido=user)         
+        return queryset.filter(ocorrencia__perito_atribuido=user)
     
+    # ========================================
+    # ✅ ADICIONE ESTE MÉTODO AQUI
+    # ========================================
+    
+    @action(detail=True, methods=['post'], url_path='geocodificar')
+    def geocodificar_endereco(self, request, pk=None):
+        """
+        Geocodifica um endereço específico manualmente.
+        POST /api/enderecos/{id}/geocodificar/
+        """
+        endereco = self.get_object()
+        
+        # Validações
+        if endereco.tipo != 'EXTERNA':
+            return Response(
+                {'error': 'Apenas endereços externos podem ser geocodificados.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if endereco.coordenadas_manuais:
+            return Response(
+                {'error': 'Este endereço possui coordenadas manuais que não devem ser sobrescritas.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not endereco.logradouro:
+            return Response(
+                {'error': 'Endereço não possui logradouro para geocodificação.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Geocodifica
+        sucesso = endereco.geocodificar_async()
+        
+        if sucesso:
+            serializer = self.get_serializer(endereco)
+            return Response({
+                'message': 'Endereço geocodificado com sucesso.',
+                'endereco': serializer.data
+            })
+        else:
+            return Response(
+                {'error': 'Não foi possível geocodificar o endereço. Tente novamente.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )

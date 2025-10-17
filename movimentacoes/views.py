@@ -36,7 +36,10 @@ class MovimentacaoViewSet(
         try:
             ocorrencia = Ocorrencia.objects.get(pk=ocorrencia_id)
         except Ocorrencia.DoesNotExist:
-            return Response({"error": "Ocorrência não encontrada."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "Ocorrência não encontrada."}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
 
         serializer = self.get_serializer(
             data=request.data,
@@ -44,9 +47,14 @@ class MovimentacaoViewSet(
         )
         
         serializer.is_valid(raise_exception=True)
+        
+        # ✅ CORRETO: SEM passar nada, deixa o serializer fazer tudo
         movimentacao = serializer.save()
         
-        response_serializer = MovimentacaoSerializer(movimentacao, context={'request': request})
+        response_serializer = MovimentacaoSerializer(
+            movimentacao, 
+            context={'request': request}
+        )
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
