@@ -75,7 +75,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset()
 
         if user.is_superuser or user.perfil == 'ADMINISTRATIVO':
-            if self.action != 'lixeira':
+            if self.action not in ['lixeira', 'restaurar']:  # ← LINHA CORRIGIDA
                 queryset = queryset.filter(deleted_at__isnull=True)
             return queryset
 

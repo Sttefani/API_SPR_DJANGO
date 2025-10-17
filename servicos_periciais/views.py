@@ -22,6 +22,16 @@ class ServicoPericialViewSet(viewsets.ModelViewSet):
     search_fields = ['sigla', 'nome']  # ← ADICIONE
     pagination_class = None  # ← ADICIONE (esta é a linha crítica)
     
+    # ← ADICIONE ESTE MÉTODO
+    def get_queryset(self):
+        """
+        Retorna queryset apropriado:
+        - Para lixeira e restaurar: inclui objetos deletados
+        - Para outras actions: apenas objetos ativos
+        """
+        if self.action in ['lixeira', 'restaurar']:
+            return ServicoPericial.all_objects.all().order_by('sigla')
+        return ServicoPericial.objects.all().order_by('sigla')
     
     
     # ← REMOVI o método list() customizado para usar paginação padrão

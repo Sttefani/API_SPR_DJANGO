@@ -39,6 +39,44 @@ class UserManagementViewSet(mixins.ListModelMixin,
     serializer_class = UserManagementSerializer
     permission_classes = [IsSuperAdminUser]
     filterset_fields = ['nome_completo', 'email', 'cpf', 'status', 'perfil']
+    
+    def update(self, request, *args, **kwargs):
+        """Override para debug"""
+        print("=" * 80)
+        print(f"🔍 DADOS RECEBIDOS: {request.data}")
+        print("=" * 80)
+        
+        try:
+            response = super().update(request, *args, **kwargs)
+            print("✅ Sucesso!")
+            return response
+        except Exception as e:
+            print(f"❌ ERRO: {type(e).__name__}")
+            print(f"❌ MENSAGEM: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+    def partial_update(self, request, *args, **kwargs):
+        """Override para debug"""  
+        print("=" * 80)
+        print(f"🔍 PARTIAL UPDATE - DADOS: {request.data}")
+        print("=" * 80)
+        
+        try:
+            response = super().partial_update(request, *args, **kwargs)
+            print("✅ Sucesso!")
+            return response
+        except Exception as e:
+            print(f"❌ ERRO: {type(e).__name__}")
+            print(f"❌ MENSAGEM: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+    def perform_update(self, serializer):
+        """Salva quem foi o último a atualizar o usuário."""
+        serializer.save(updated_by=self.request.user)
 
     def perform_update(self, serializer):
         """Salva quem foi o último a atualizar o usuário."""
