@@ -153,11 +153,11 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ),
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE':6, # Alterei para 10, como no seu exemplo
-
-    # AQUI ESTÁ A CORREÇÃO:
-    # Esta é uma nova chave no dicionário principal do REST_FRAMEWORK
+    'DEFAULT_PAGINATION_CLASS':
+        'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 10,  # Padrão para TODAS as APIs
+    'PAGE_SIZE_QUERY_PARAM': 'page_size',  # Permite ?page_size=10,25,50,100
+    'MAX_PAGE_SIZE': 100,  # Limite máximo
     'DEFAULT_FILTER_BACKENDS': [
         'django_filters.rest_framework.DjangoFilterBackend',
     ]

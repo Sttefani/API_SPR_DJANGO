@@ -366,10 +366,28 @@ class OrdemServico(AuditModel):
     def reiterar(self, prazo_dias, ordenada_por, user, observacoes=''):
         """
         Cria uma OS de reiteração com prazo menor.
+        Só permite reiterar a OS mais recente da cadeia.
         """
+        from django.core.exceptions import ValidationError
+        
         # Determina qual é a OS original
         original = self if self.numero_reiteracao == 0 else self.os_original
         
+        # ✅ VALIDAÇÃO: Verifica se esta é a última OS da cadeia
+        ultima_reiteracao = OrdemServico.objects.filter(
+            os_original=original,
+            deleted_at__isnull=True
+        ).order_by('-numero_reiteracao').first()
+        
+        # Se existem reiterações, só pode reiterar a mais recente
+        if ultima_reiteracao and ultima_reiteracao.id != self.id:
+            raise ValidationError(
+                f'Não é possível reiterar esta OS. '
+                f'Você deve reiterar a OS mais recente: {ultima_reiteracao.numero_os} '
+                f'({ultima_reiteracao.numero_reiteracao}ª Reiteração)'
+            )
+        
+        # Cria a nova reiteração
         nova_os = OrdemServico.objects.create(
             ocorrencia=self.ocorrencia,
             prazo_dias=prazo_dias,
@@ -383,11 +401,11 @@ class OrdemServico(AuditModel):
             processo_sei_referencia=self.processo_sei_referencia,
             processo_judicial_referencia=self.processo_judicial_referencia,
             os_original=original,
-            numero_reiteracao=self.numero_reiteracao + 1,
+            numero_reiteracao=self.numero_reiteracao + 1,  # ✅ Incrementa corretamente
             created_by=user
         )
         return nova_os
-    
+        
     def concluir(self, user):
         """
         Marca a OS como concluída.

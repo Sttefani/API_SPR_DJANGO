@@ -810,65 +810,148 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
         return Response({'detail': 'Perfil não reconhecido'}, status=400)
 
+    # Em ocorrencias/views.py
+
     @action(detail=True, methods=['post'])
     def vincular_procedimento(self, request, pk=None):
         """
-        Vincula um procedimento a uma ocorrência e registra a alteração para fins de auditoria.
+        Vincula ou desvincula um procedimento a uma ocorrência,
+        registrando a alteração para fins de auditoria.
         """
         ocorrencia = self.get_object()
-
-        if ocorrencia.procedimento_cadastrado and not request.user.is_superuser:
-            return Response({
-                'error': f'Esta ocorrência já está vinculada ao procedimento {ocorrencia.procedimento_cadastrado}. '
-                         f'Apenas super administradores podem alterar.'
-            }, status=status.HTTP_403_FORBIDDEN)
+        user = request.user
 
         if ocorrencia.esta_finalizada:
-            return Response({
-                'error': 'Não é possível vincular procedimento a uma ocorrência finalizada.'
-            }, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Não é possível alterar o vínculo de uma ocorrência finalizada.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Lógica de permissão centralizada que funciona para vincular e desvincular
+        if ocorrencia.perito_atribuido:
+            is_perito_da_ocorrencia = user.id == ocorrencia.perito_atribuido.id
+            if not user.is_superuser and not is_perito_da_ocorrencia:
+                return Response({'error': 'Você não tem permissão para fazer isso. Apenas o perito da ocorrência ou um super administrador pode alterar o vínculo.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # A única diferença é como lidamos com o ID
         procedimento_id = request.data.get('procedimento_cadastrado_id')
 
-        if not procedimento_id:
-            return Response({
-                'error': 'O campo `procedimento_cadastrado_id` é obrigatório.'
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            from procedimentos_cadastrados.models import ProcedimentoCadastrado
-            from .models import HistoricoVinculacao
-
-            procedimento_novo = ProcedimentoCadastrado.objects.get(id=procedimento_id)
-
+        # Se o ID for null, estamos desvinculando.
+        if procedimento_id is None:
             procedimento_antigo = ocorrencia.procedimento_cadastrado
+            if not procedimento_antigo:
+                 return Response({'message': 'A ocorrência já não possuía procedimento vinculado.'}, status=status.HTTP_200_OK)
 
-            ocorrencia.procedimento_cadastrado = procedimento_novo
-            ocorrencia.updated_by = request.user
-            ocorrencia.save(update_fields=['procedimento_cadastrado', 'updated_by', 'updated_at'])
+            ocorrencia.procedimento_cadastrado = None
+            message = f'Procedimento {procedimento_antigo} desvinculado com sucesso.'
+            procedimento_novo = None
 
-            HistoricoVinculacao.objects.create(
-                ocorrencia=ocorrencia,
-                procedimento_antigo=procedimento_antigo,
-                procedimento_novo=procedimento_novo,
-                usuario=request.user
-            )
+        # Se o ID existir, estamos vinculando.
+        else:
+            try:
+                from procedimentos_cadastrados.models import ProcedimentoCadastrado
+                procedimento_novo = ProcedimentoCadastrado.objects.get(id=procedimento_id)
+                procedimento_antigo = ocorrencia.procedimento_cadastrado
+                ocorrencia.procedimento_cadastrado = procedimento_novo
+                message = f'Procedimento {procedimento_novo} vinculado com sucesso.'
+            except ProcedimentoCadastrado.DoesNotExist:
+                return Response({'error': 'Procedimento com o ID fornecido não foi encontrado.'}, status=status.HTTP_404_NOT_FOUND)
 
-            serializer = self.get_serializer(ocorrencia)
-            return Response({
-                'message': f'Procedimento {procedimento_novo} vinculado com sucesso e a alteração foi registrada.',
-                'ocorrencia': serializer.data
-            })
+        # Salvar e criar histórico para ambas as operações
+        from .models import HistoricoVinculacao
+        ocorrencia.updated_by = request.user
+        ocorrencia.save(update_fields=['procedimento_cadastrado', 'updated_by', 'updated_at'])
 
-        except ProcedimentoCadastrado.DoesNotExist:
-            return Response({
-                'error': 'Procedimento com o ID fornecido não foi encontrado.'
-            }, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            return Response({
-                'error': f'Ocorreu um erro inesperado no servidor: {str(e)}'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        HistoricoVinculacao.objects.create(
+            ocorrencia=ocorrencia,
+            procedimento_antigo=procedimento_antigo,
+            procedimento_novo=procedimento_novo,
+            usuario=request.user
+        )
+
+        serializer = self.get_serializer(ocorrencia)
+        return Response({
+            'message': message,
+            'ocorrencia': serializer.data
+        })# Em ocorrencias/views.py
+
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework import status
+# Certifique-se de que seus modelos estão importados
+# from procedimentos_cadastrados.models import ProcedimentoCadastrado
+# from .models import HistoricoVinculacao
+
+# ... dentro do seu OcorrenciaViewSet ...
+
+@action(detail=True, methods=['post'])
+def vincular_procedimento(self, request, pk=None):
+    """
+    Vincula ou desvincula um procedimento a uma ocorrência,
+    registrando a alteração para fins de auditoria.
+    """
+    ocorrencia = self.get_object()
+    user = request.user
+
+    # Checagem de bloqueio
+    if ocorrencia.esta_finalizada:
+        return Response({'error': 'Não é possível alterar o vínculo de uma ocorrência finalizada.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Lógica de permissão centralizada
+    if ocorrencia.perito_atribuido:
+        is_perito_da_ocorrencia = user.id == ocorrencia.perito_atribuido.id
+        if not user.is_superuser and not is_perito_da_ocorrencia:
+            return Response({'error': 'Você não tem permissão para fazer isso. Apenas o perito da ocorrência ou um super administrador pode alterar o vínculo.'}, status=status.HTTP_403_FORBIDDEN)
+
+    procedimento_id = request.data.get('procedimento_cadastrado_id')
+
+    try:
+        from procedimentos_cadastrados.models import ProcedimentoCadastrado
+        from .models import HistoricoVinculacao
+
+        procedimento_antigo = ocorrencia.procedimento_cadastrado
+        procedimento_novo = None
+        message = ''
+
+        # Lógica de Desvinculação
+        if procedimento_id is None:
+            if not procedimento_antigo:
+                # Se não havia nada para desvincular, apenas retorne sucesso.
+                return Response({'message': 'A ocorrência já não possuía procedimento vinculado.'}, status=status.HTTP_200_OK)
             
+            # CORREÇÃO DE SEGURANÇA: Usar um atributo específico em vez do objeto inteiro no f-string.
+            message = f'Procedimento {procedimento_antigo.numero_formatado_com_ano} desvinculado com sucesso.'
+            ocorrencia.procedimento_cadastrado = None
+
+        # Lógica de Vinculação
+        else:
+            procedimento_novo = ProcedimentoCadastrado.objects.get(id=procedimento_id)
+            ocorrencia.procedimento_cadastrado = procedimento_novo
+            message = f'Procedimento {procedimento_novo.numero_formatado_com_ano} vinculado com sucesso.'
+
+        # Salvar e criar histórico (comum a ambas as operações)
+        ocorrencia.updated_by = request.user
+        ocorrencia.save(update_fields=['procedimento_cadastrado', 'updated_by', 'updated_at'])
+
+        HistoricoVinculacao.objects.create(
+            ocorrencia=ocorrencia,
+            procedimento_antigo=procedimento_antigo,
+            procedimento_novo=procedimento_novo,
+            usuario=request.user
+        )
+
+        serializer = self.get_serializer(ocorrencia)
+        return Response({
+            'message': message,
+            'ocorrencia': serializer.data
+        })
+
+    except ProcedimentoCadastrado.DoesNotExist:
+        return Response({'error': 'Procedimento com o ID fornecido não foi encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        # Captura qualquer outro erro inesperado e retorna uma resposta JSON
+        # Isso garante que nunca teremos um erro 500 sem resposta
+        print(f"Erro inesperado em vincular_procedimento: {str(e)}") # Log para o console do servidor
+        return Response({
+            'error': f'Ocorreu um erro inesperado no servidor: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 # ========================================
 # VIEWSET DE ENDEREÇOS
 # ========================================
