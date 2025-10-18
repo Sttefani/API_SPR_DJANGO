@@ -12,19 +12,31 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from datetime import timedelta
 from pathlib import Path
+import environ  # <-- ADICIONE ESTA LINHA
+import os       # <-- ADICIONE ESTA LINHA
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# <-- ADICIONE AS 3 LINHAS ABAIXO -->
+# Configuração do django-environ
+env = environ.Env(
+    # Valor padrão para o DEBUG (False se não estiver no .env)
+    DEBUG=(bool, False)
+)
+environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-8$-0$tu^2why^@wywf1#izqkl7d$e8z9l_y+h$c=&3px+)(@^h'
+# <-- MODIFICADO: Agora lê do arquivo .env -->
+SECRET_KEY = env('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# <-- MODIFICADO: Agora lê do arquivo .env -->
+DEBUG = env('DEBUG')
 
 ALLOWED_HOSTS = []
 
@@ -42,6 +54,8 @@ INSTALLED_APPS = [
     'rest_framework',  # <--- ESSA LINHA É A MAIS IMPORTANTE PARA ESTE ERRO
     'rest_framework_simplejwt',  # Adicione esta linha
     'django_filters',
+    'django_extensions',
+
     
 
     'usuarios',
@@ -57,7 +71,8 @@ INSTALLED_APPS = [
     'ocorrencias',
     'tipos_documento',
     'movimentacoes',
-    'ordens_servico'
+    'ordens_servico',
+    'IA'
 
 ]
 
@@ -98,11 +113,11 @@ WSGI_APPLICATION = 'spr.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'api_spr_db',      # O nome do banco de dados que você criou
+        'NAME': 'api_spr_db',    # O nome do banco de dados que você criou
         'USER': 'postgres',   # Seu usuário do PostgreSQL
-        'PASSWORD': 'postgres',         # Sua senha de acesso ao banco
-        'HOST': 'localhost',             # Mantenha 'localhost' se o banco está na sua máquina
-        'PORT': '5432',   
+        'PASSWORD': env('DB_PASSWORD'),  # <-- MODIFICADO: Lê a senha do .env
+        'HOST': 'localhost',         # Mantenha 'localhost' se o banco está na sua máquina
+        'PORT': '5432',
         'OPTIONS': {'client_encoding': 'UTF8'},
     }
 }
@@ -186,3 +201,6 @@ SIMPLE_JWT = {
     'USER_ID_FIELD': 'id',
     'USER_ID_CLAIM': 'user_id',
 }
+
+# <-- MODIFICADO: Agora lê do arquivo .env -->
+GROQ_API_KEY = env('GROQ_API_KEY')
