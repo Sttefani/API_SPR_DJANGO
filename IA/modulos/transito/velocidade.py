@@ -7,6 +7,8 @@ class CalculadoraVelocidade:
     Baseado em princípios físicos e literatura técnica internacional
     """
     
+        # Coeficientes de atrito (μ)
+        # Fonte: Limpert (1999), Brach (2005), Fricke (1990)
     # Coeficientes de atrito (μ)
     # Fonte: Limpert (1999), Brach (2005), Fricke (1990)
     COEFICIENTES = {
@@ -15,20 +17,25 @@ class CalculadoraVelocidade:
         'asfalto_com_oleo': 0.30,
         'concreto_seco': 0.80,
         'concreto_molhado': 0.60,
+        'concreto_com_oleo': 0.40,
         'terra_seca': 0.40,
         'terra_molhada': 0.30,
         'cascalho_seco': 0.35,
         'cascalho_molhado': 0.25,
-        'grama_seca': 0.35,         # ← NOVO!
-        'grama_molhada': 0.25,      # ← NOVO!
-        'lama': 0.20,               # ← NOVO!
-        'areia_seca': 0.30,         # ← NOVO!
-        'areia_molhada': 0.20,      # ← NOVO!
-        'paralelepipedo_seco': 0.60, # ← NOVO!
-        'paralelepipedo_molhado': 0.40, # ← NOVO!
+        'grama_seca': 0.35,      # ← JÁ TINHA
+        'grama_seco': 0.35,      # ← ADICIONE (masculino)
+        'grama_molhada': 0.25,   # ← JÁ TINHA
+        'grama_molhado': 0.25,   # ← ADICIONE (masculino)
+        'lama': 0.20,
+        'areia_seca': 0.30,
+        'areia_seco': 0.30,      # ← ADICIONE
+        'areia_molhada': 0.20,
+        'areia_molhado': 0.20,   # ← ADICIONE
+        'paralelepipedo_seco': 0.60,
+        'paralelepipedo_molhado': 0.40,
         'gelo': 0.10,
         'neve': 0.20,
-}
+    }
     
     GRAVIDADE = 9.81  # m/s²
     

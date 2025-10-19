@@ -1,5 +1,3 @@
-# spr/urls.py
-
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework_nested import routers
@@ -27,7 +25,6 @@ from ocorrencias.views_relatorios import RelatoriosGerenciaisViewSet
 # ROTEADOR NÍVEL 1 (PRINCIPAL)
 # =============================================================================
 router = routers.DefaultRouter()
-# Registra todos os apps que são "pais" ou independentes
 router.register(r'usuarios', UserManagementViewSet)
 router.register(r'servicos-periciais', ServicoPericialViewSet)
 router.register(r'cidades', CidadeViewSet)
@@ -46,7 +43,7 @@ router.register(r'registrar', UserRegistrationViewSet, basename='user-registrati
 router.register(r'ordens-servico', OrdemServicoViewSet, basename='ordens-servico')
 
 # =============================================================================
-# ROTEADORES ANINHADOS (NÍVEL 2 - MOVIMENTAÇÕES DENTRO DE OCORRÊNCIAS)
+# ROTEADORES ANINHADOS
 # =============================================================================
 ocorrencias_router = routers.NestedDefaultRouter(router, r'ocorrencias', lookup='ocorrencia')
 ocorrencias_router.register(r'movimentacoes', MovimentacaoViewSet, basename='ocorrencia-movimentacoes')
@@ -71,6 +68,7 @@ urlpatterns = [
     path('api/token/', MyTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     
-    path('api/ia/', include('IA.urls')),  # ← ADICIONE AQUI
-
+    # Inclui as rotas do app de Inteligência Artificial
+    path('api/ia/', include('IA.urls')),
 ]
+
