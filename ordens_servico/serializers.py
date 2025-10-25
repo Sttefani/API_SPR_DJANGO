@@ -50,6 +50,7 @@ class OrdemServicoSerializer(serializers.ModelSerializer):
         model = OrdemServico
         fields = [
             'id', 'numero_os', 'prazo_dias', 'status', 'data_conclusao',
+            'data_prazo',  # ✅ CAMPO NOVO ADICIONADO
             'texto_padrao', 'observacoes_administrativo', 'justificativa_atraso',
             'numero_documento_referencia', 'processo_sei_referencia',
             'processo_judicial_referencia', 'data_primeira_visualizacao',
@@ -216,10 +217,9 @@ class CriarOrdemServicoComAssinaturaSerializer(serializers.Serializer):
         allow_blank=True,
         max_length=5000,
         label="Observações",
-        help_text="Observações internas (não aparecem no PDF oficial)"
+        help_text="Observações adicionais sobre esta OS"
     )
     
-    # Documentos de referência (opcionais)
     tipo_documento_referencia_id = serializers.PrimaryKeyRelatedField(
         queryset=TipoDocumento.objects.all(),
         required=False,

@@ -140,13 +140,21 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         # Validações de negócio
         if ocorrencia.status == Ocorrencia.Status.FINALIZADA:
             return Response(
-                {"error": "Não é possível emitir OS para ocorrência finalizada."},
+                {
+                    "error": "Não é possível emitir Ordem de Serviço para esta ocorrência.",
+                    "details": "A ocorrência está com status 'Finalizada'. Ordens de Serviço só podem ser emitidas para ocorrências com status 'Aberta', 'Em Andamento' ou 'Aguardando Perícia'.",
+                    "action": "Se necessário, altere o status da ocorrência antes de emitir a OS."
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         if not ocorrencia.perito_atribuido:
             return Response(
-                {"error": "A ocorrência precisa ter um perito atribuído antes de emitir OS."},
+                {
+                    "error": "Não é possível emitir Ordem de Serviço.",
+                    "details": "A ocorrência precisa ter um perito atribuído antes de emitir a OS.",
+                    "action": "Vá em 'Editar Ocorrência', atribua um perito no campo 'Perito Atribuído' e tente novamente."
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -301,8 +309,16 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             )
         
         if ordem_servico.ciente_por:
+            data_ciencia = ordem_servico.data_ciencia.strftime('%d/%m/%Y às %H:%M') if ordem_servico.data_ciencia else 'data desconhecida'
             return Response(
-                {"message": "Ciência já registrada para esta OS."},
+                {
+                    "error": "Ciência já registrada para esta Ordem de Serviço.",
+                    "details": f"Você já registrou ciência em {data_ciencia}. Não é necessário tomar ciência novamente.",
+                    "context": {
+                        "data_ciencia": data_ciencia,
+                        "status_atual": ordem_servico.get_status_display()
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -335,6 +351,8 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         Cria uma OS de reiteração baseada na original/anterior.
         Só ADMINISTRATIVO pode reiterar.
         """
+        from django.core.exceptions import ValidationError
+        
         os_anterior = self.get_object()
         
         # Valida assinatura
@@ -346,16 +364,25 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         validated_data.pop('email')
         validated_data.pop('password')
         
-        # Cria reiteração
-        ordenada_por = validated_data.get('ordenada_por_id')
-        nova_os = os_anterior.reiterar(
-            prazo_dias=validated_data['prazo_dias'],
-            ordenada_por=ordenada_por,
-            user=request.user,
-            observacoes=validated_data.get('observacoes_administrativo', '')
-        )
+        # ✅ CORREÇÃO: Captura ValidationError para retornar mensagem amigável
+        try:
+            # Cria reiteração
+            ordenada_por = validated_data.get('ordenada_por_id')
+            nova_os = os_anterior.reiterar(
+                prazo_dias=validated_data['prazo_dias'],
+                ordenada_por=ordenada_por,
+                user=request.user,
+                observacoes=validated_data.get('observacoes_administrativo', '')
+            )
+        except ValidationError as e:
+            # Retorna erro 400 com a mensagem do ValidationError
+            error_message = e.messages[0] if hasattr(e, 'messages') else str(e)
+            return Response(
+                {'error': error_message},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
-        # Retorna resposta
+        # Retorna resposta de sucesso
         response_serializer = OrdemServicoSerializer(
             nova_os,
             context={'request': request}
@@ -382,10 +409,32 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             )
         
         if ordem_servico.status != OrdemServico.Status.ABERTA:
+            status_atual = ordem_servico.get_status_display()
+            
+            # Mensagens específicas por status
+            if ordem_servico.status == OrdemServico.Status.AGUARDANDO_CIENCIA:
+                detalhes = "Você precisa tomar ciência da Ordem de Serviço antes de iniciar o trabalho."
+                acao = "Clique em 'Tomar Ciência' primeiro, depois você poderá iniciar o trabalho."
+            elif ordem_servico.status == OrdemServico.Status.EM_ANDAMENTO:
+                detalhes = "Esta ordem já está com o trabalho iniciado."
+                acao = "Não é necessário iniciar novamente. Continue trabalhando na OS."
+            elif ordem_servico.status == OrdemServico.Status.CONCLUIDA:
+                detalhes = "Esta ordem já foi concluída."
+                acao = "Não é possível iniciar trabalho em uma OS já concluída."
+            else:
+                detalhes = f"O status atual é '{status_atual}'. Você só pode iniciar trabalho em ordens com status 'Aberta'."
+                acao = "Verifique o status da ordem e o fluxo correto."
+            
             return Response(
                 {
-                    "error":
-                        f"OS está com status '{ordem_servico.get_status_display()}'. Só pode iniciar trabalho em OS 'Aberta'."},
+                    "error": "Não é possível iniciar o trabalho nesta Ordem de Serviço.",
+                    "details": detalhes,
+                    "action": acao,
+                    "context": {
+                        "status_atual": status_atual,
+                        "status_esperado": "Aberta"
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -415,8 +464,20 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             )
         
         if not ordem_servico.esta_vencida:
+            # Melhora a mensagem com contexto de datas
+            prazo_str = ordem_servico.data_prazo.strftime('%d/%m/%Y') if ordem_servico.data_prazo else 'Não definido'
+            hoje_str = timezone.now().strftime('%d/%m/%Y')
+            
             return Response(
-                {"error": "Esta OS não está vencida."},
+                {
+                    "error": "Esta Ordem de Serviço não está vencida.",
+                    "details": "Você só pode justificar atraso em ordens que já passaram do prazo de entrega.",
+                    "context": {
+                        "prazo": prazo_str,
+                        "hoje": hoje_str,
+                        "status": ordem_servico.get_status_display()
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -479,15 +540,33 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         
         # ✅ VALIDAÇÃO 3: Perito deve ter tomado ciência
         if ordem_servico.status == OrdemServico.Status.AGUARDANDO_CIENCIA:
+            perito_nome = ordem_servico.ocorrencia.perito_atribuido.nome_completo if ordem_servico.ocorrencia.perito_atribuido else 'o perito'
             return Response(
-                {'error': 'O perito ainda não tomou ciência desta OS. A conclusão só é possível após a ciência.'},
+                {
+                    'error': 'Não é possível concluir esta Ordem de Serviço.',
+                    'details': f'{perito_nome} ainda não tomou ciência da ordem.',
+                    'action': 'Aguarde o perito tomar ciência ou entre em contato com ele antes de dar baixa na OS.',
+                    'context': {
+                        'os_numero': ordem_servico.numero_os,
+                        'status_atual': 'Aguardando Ciência'
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         # ✅ VALIDAÇÃO 4: Verificar se tem ciência (dupla checagem)
         if not ordem_servico.ciente_por:
+            perito_nome = ordem_servico.ocorrencia.perito_atribuido.nome_completo if ordem_servico.ocorrencia.perito_atribuido else 'o perito'
             return Response(
-                {'error': 'Esta OS não possui registro de ciência. Solicite ao perito que tome ciência primeiro.'},
+                {
+                    'error': 'Esta Ordem de Serviço não possui registro de ciência.',
+                    'details': f'O sistema não identificou que {perito_nome} tomou ciência desta ordem.',
+                    'action': f'Entre em contato com {perito_nome} para que ele tome ciência antes de você dar baixa.',
+                    'context': {
+                        'os_numero': ordem_servico.numero_os,
+                        'perito': perito_nome
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -639,24 +718,33 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         # QuerySet base
         qs = OrdemServico.objects.filter(filtros)
         
-        # 1. RESUMO GERAL
+        # ✅ CORREÇÃO: Adicionar data atual para verificar vencimentos
+        data_atual = timezone.now().date()
+        
+        # 1. RESUMO GERAL - ✅ CORRIGIDO
         resumo_geral = {
             'total_emitidas': qs.count(),
             'aguardando_ciencia': qs.filter(status='AGUARDANDO_CIENCIA').count(),
             'abertas': qs.filter(status='ABERTA').count(),
             'em_andamento': qs.filter(status='EM_ANDAMENTO').count(),
-            'vencidas': qs.filter(status='VENCIDA').count(),
+            'vencidas': qs.filter(
+                Q(status__in=['AGUARDANDO_CIENCIA', 'ABERTA', 'EM_ANDAMENTO']) &
+                Q(data_prazo__lt=data_atual)
+            ).count(),
             'concluidas': qs.filter(status='CONCLUIDA').count(),
         }
         
-        # 2. PRODUÇÃO POR PERITO
+        # 2. PRODUÇÃO POR PERITO - ✅ CORRIGIDO
         producao_por_perito = qs.values(
             'ocorrencia__perito_atribuido__nome_completo'
         ).annotate(
             total_emitidas=Count('id'),
             concluidas=Count('id', filter=Q(status='CONCLUIDA')),
             em_andamento=Count('id', filter=Q(status='EM_ANDAMENTO')),
-            vencidas=Count('id', filter=Q(status='VENCIDA')),
+            vencidas=Count('id', filter=Q(
+                status__in=['AGUARDANDO_CIENCIA', 'ABERTA', 'EM_ANDAMENTO'],
+                data_prazo__lt=data_atual
+            )),
             aguardando_ciencia=Count('id', filter=Q(status='AGUARDANDO_CIENCIA')),
         ).order_by('-total_emitidas')
         
@@ -693,17 +781,20 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
                 )
             })
         
-        # 3. POR UNIDADE DEMANDANTE
+        # 3. POR UNIDADE DEMANDANTE - ✅ CORRIGIDO
         por_unidade = qs.values(
             'unidade_demandante__nome'
         ).annotate(
             total=Count('id'),
             concluidas=Count('id', filter=Q(status='CONCLUIDA')),
             em_andamento=Count('id', filter=Q(status='EM_ANDAMENTO')),
-            vencidas=Count('id', filter=Q(status='VENCIDA'))
+            vencidas=Count('id', filter=Q(
+                status__in=['AGUARDANDO_CIENCIA', 'ABERTA', 'EM_ANDAMENTO'],
+                data_prazo__lt=data_atual
+            ))
         ).order_by('-total')
         
-        # 4. POR SERVIÇO PERICIAL
+        # 4. POR SERVIÇO PERICIAL - ✅ CORRIGIDO
         por_servico = qs.values(
             'ocorrencia__servico_pericial__sigla',
             'ocorrencia__servico_pericial__nome'
@@ -711,7 +802,10 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             total=Count('id'),
             concluidas=Count('id', filter=Q(status='CONCLUIDA')),
             em_andamento=Count('id', filter=Q(status='EM_ANDAMENTO')),
-            vencidas=Count('id', filter=Q(status='VENCIDA'))
+            vencidas=Count('id', filter=Q(
+                status__in=['AGUARDANDO_CIENCIA', 'ABERTA', 'EM_ANDAMENTO'],
+                data_prazo__lt=data_atual
+            ))
         ).order_by('-total')
         
         # 5. REITERAÇÕES

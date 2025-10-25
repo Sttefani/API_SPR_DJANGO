@@ -43,6 +43,14 @@ class OrdemServico(AuditModel):
         verbose_name="Prazo para Conclusão (em dias)"
     )
     
+    # ✅ NOVO CAMPO: Data limite para conclusão (calculada após ciência)
+    data_prazo = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Data Limite",
+        help_text="Data calculada automaticamente: data_ciencia + prazo_dias"
+    )
+    
     texto_padrao = models.TextField(
         editable=False,
         default="O DIRETOR, NO USO DE SUAS ATRIBUIÇÕES LEGAIS, EMITE A PRESENTE ORDEM DE SERVIÇO, DETERMINANDO A REALIZAÇÃO DOS EXAMES E CONFECÇÃO DO LAUDO PERICIAL."
@@ -180,11 +188,15 @@ class OrdemServico(AuditModel):
     @property
     def data_vencimento(self):
         """
-        Calcula a data de vencimento baseada na ciência + prazo.
-        Se ainda não teve ciência, retorna None.
+        Retorna a data de vencimento.
+        AGORA USA O CAMPO data_prazo se existir, senão calcula.
         """
+        if self.data_prazo:
+            return timezone.datetime.combine(self.data_prazo, timezone.datetime.min.time()).replace(tzinfo=timezone.get_current_timezone())
+        
         if self.data_ciencia:
             return self.data_ciencia + timedelta(days=self.prazo_dias)
+        
         return None
     
     @property
@@ -215,11 +227,12 @@ class OrdemServico(AuditModel):
         if self.status == self.Status.CONCLUIDA:
             return False
         
-        dias = self.dias_restantes
-        if dias is None:
+        if not self.data_prazo:
             return False
         
-        return dias < 0
+        # Compara apenas as datas (ignora horário)
+        hoje = timezone.now().date()
+        return self.data_prazo < hoje
     
     @property
     def urgencia(self):
@@ -250,7 +263,7 @@ class OrdemServico(AuditModel):
             return 'verde'     # 5+ dias
     
     @property
-    def concluida_com_atraso(self):  # ← ADICIONAR AQUI
+    def concluida_com_atraso(self):
         """
         Verifica se a OS foi concluída após o prazo de vencimento.
         """
@@ -333,12 +346,16 @@ class OrdemServico(AuditModel):
     def tomar_ciencia(self, user, ip_address):
         """
         Registra a ciência do perito na OS com assinatura digital.
+        ✅ AGORA CALCULA E SALVA data_prazo
         """
         if not self.ciente_por:
             self.ciente_por = user
             self.data_ciencia = timezone.now()
             self.ip_ciencia = ip_address
             self.status = self.Status.ABERTA
+            
+            # ✅ CALCULA E SALVA A DATA LIMITE
+            self.data_prazo = (self.data_ciencia + timedelta(days=self.prazo_dias)).date()
             
             # Registra visualização se ainda não foi registrada
             if not self.data_primeira_visualizacao:
@@ -401,7 +418,7 @@ class OrdemServico(AuditModel):
             processo_sei_referencia=self.processo_sei_referencia,
             processo_judicial_referencia=self.processo_judicial_referencia,
             os_original=original,
-            numero_reiteracao=self.numero_reiteracao + 1,  # ✅ Incrementa corretamente
+            numero_reiteracao=self.numero_reiteracao + 1,
             created_by=user
         )
         return nova_os
@@ -410,12 +427,44 @@ class OrdemServico(AuditModel):
         """
         Marca a OS como concluída.
         Só pode ser feito pelo ADMINISTRATIVO.
+        
+        ✅ REGRA DE NEGÓCIO: 
+        Ao concluir uma OS (original ou reiteração), o sistema conclui
+        automaticamente TODA a cadeia (original + todas as reiterações).
+        
+        Isso garante que não fique nenhuma OS "órfã" em aberto quando
+        a última reiteração for concluída.
         """
+        data_conclusao = timezone.now()
+        
+        # Conclui a OS atual
         self.status = self.Status.CONCLUIDA
-        self.data_conclusao = timezone.now()
-        self.concluida_por = user  # ✅ SALVA QUEM CONCLUIU
+        self.data_conclusao = data_conclusao
+        self.concluida_por = user
         self.updated_by = user
         self.save()
+        
+        # ✅ CONCLUI TODA A CADEIA AUTOMATICAMENTE
+        # Determina qual é a OS original
+        os_original = self if self.numero_reiteracao == 0 else self.os_original
+        
+        if os_original:
+            # Lista todas as OS da cadeia
+            cadeia_completa = [os_original] + list(
+                OrdemServico.objects.filter(
+                    os_original=os_original,
+                    deleted_at__isnull=True
+                ).exclude(id=self.id)  # Exclui a atual (já foi concluída acima)
+            )
+            
+            # Conclui todas as OS da cadeia que ainda não estão concluídas
+            for os in cadeia_completa:
+                if os.status != self.Status.CONCLUIDA:
+                    os.status = self.Status.CONCLUIDA
+                    os.data_conclusao = data_conclusao
+                    os.concluida_por = user
+                    os.updated_by = user
+                    os.save()
     
     def atualizar_status(self):
         """
