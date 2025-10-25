@@ -4,6 +4,8 @@ from django.db import models
 from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
+from django.db import transaction  # ✅ IMPORT ADICIONADO (para Risco 1)
+from django.db.models import Q  # ✅ IMPORT ADICIONADO (para Risco 4)
 from ocorrencias.models import Ocorrencia
 from usuarios.models import AuditModel
 from unidades_demandantes.models import UnidadeDemandante
@@ -21,7 +23,7 @@ class OrdemServico(AuditModel):
         AGUARDANDO_CIENCIA = 'AGUARDANDO_CIENCIA', 'Aguardando Ciência'
         ABERTA = 'ABERTA', 'Aberta'
         EM_ANDAMENTO = 'EM_ANDAMENTO', 'Em Andamento'
-        VENCIDA = 'VENCIDA', 'Vencida'
+        # VENCIDA = 'VENCIDA', 'Vencida'  <- ❌ REMOVIDO (Risco 2: Ambiguidade)
         CONCLUIDA = 'CONCLUIDA', 'Concluída'
 
     # --- Relação Principal ---
@@ -192,7 +194,11 @@ class OrdemServico(AuditModel):
         AGORA USA O CAMPO data_prazo se existir, senão calcula.
         """
         if self.data_prazo:
-            return timezone.datetime.combine(self.data_prazo, timezone.datetime.min.time()).replace(tzinfo=timezone.get_current_timezone())
+            # Converte DateField para DateTime (início do dia) com timezone
+            return timezone.datetime.combine(
+                self.data_prazo, 
+                timezone.datetime.min.time()
+            ).replace(tzinfo=timezone.get_current_timezone())
         
         if self.data_ciencia:
             return self.data_ciencia + timedelta(days=self.prazo_dias)
@@ -209,16 +215,14 @@ class OrdemServico(AuditModel):
     def dias_restantes(self):
         """
         Calcula quantos dias faltam para o vencimento.
-        Retorna None se não houver ciência ainda.
-        Retorna número negativo se já venceu.
+        Usa data_prazo como fonte da verdade.
         """
-        if not self.data_vencimento:
+        if not self.data_prazo or self.status == self.Status.CONCLUIDA:
             return None
+            
+        hoje = timezone.now().date()
+        delta = self.data_prazo - hoje
         
-        if self.status == self.Status.CONCLUIDA:
-            return None
-        
-        delta = self.data_vencimento - timezone.now()
         return delta.days
     
     @property
@@ -285,10 +289,11 @@ class OrdemServico(AuditModel):
             return 0
         
         total_segundos = timedelta(days=self.prazo_dias).total_seconds()
-        decorrido = (timezone.now() - self.data_ciencia).total_seconds()
         
         if total_segundos == 0:
             return 0
+            
+        decorrido = (timezone.now() - self.data_ciencia).total_seconds()
         
         percentual = (decorrido / total_segundos) * 100
         return min(int(percentual), 100)
@@ -307,7 +312,9 @@ class OrdemServico(AuditModel):
             return total
         else:
             # É uma reiteração, busca a original e soma tudo
-            original = self.os_original or self
+            original = self.os_original
+            if not original:
+                return self.prazo_dias # Retorna apenas seu próprio prazo se for órfã
             return original.prazo_acumulado_total
     
     @property
@@ -322,6 +329,8 @@ class OrdemServico(AuditModel):
         else:
             # É uma reiteração, busca a original
             original = self.os_original
+            if not original:
+                 return [self] # Retorna apenas a si mesma se for órfã
             todas = [original] + list(original.reiteracoes.filter(
                 deleted_at__isnull=True).order_by('numero_reiteracao'))
         
@@ -426,14 +435,8 @@ class OrdemServico(AuditModel):
     def concluir(self, user):
         """
         Marca a OS como concluída.
-        Só pode ser feito pelo ADMINISTRATIVO.
-        
-        ✅ REGRA DE NEGÓCIO: 
-        Ao concluir uma OS (original ou reiteração), o sistema conclui
-        automaticamente TODA a cadeia (original + todas as reiterações).
-        
-        Isso garante que não fique nenhuma OS "órfã" em aberto quando
-        a última reiteração for concluída.
+        ✅ REGRA DE NEGÓCIO: Conclui automaticamente TODA a cadeia.
+        ✅ OTIMIZADO (Risco 4): Usa .update() para performance.
         """
         data_conclusao = timezone.now()
         
@@ -442,55 +445,59 @@ class OrdemServico(AuditModel):
         self.data_conclusao = data_conclusao
         self.concluida_por = user
         self.updated_by = user
-        self.save()
+        self.save() # Salva a si mesma
         
-        # ✅ CONCLUI TODA A CADEIA AUTOMATICAMENTE
-        # Determina qual é a OS original
+        # Determina a OS original
         os_original = self if self.numero_reiteracao == 0 else self.os_original
         
         if os_original:
-            # Lista todas as OS da cadeia
-            cadeia_completa = [os_original] + list(
-                OrdemServico.objects.filter(
-                    os_original=os_original,
-                    deleted_at__isnull=True
-                ).exclude(id=self.id)  # Exclui a atual (já foi concluída acima)
-            )
+            # Define a query para toda a cadeia (original + reiterações)
+            cadeia_query = Q(id=os_original.id) | Q(os_original=os_original)
             
-            # Conclui todas as OS da cadeia que ainda não estão concluídas
-            for os in cadeia_completa:
-                if os.status != self.Status.CONCLUIDA:
-                    os.status = self.Status.CONCLUIDA
-                    os.data_conclusao = data_conclusao
-                    os.concluida_por = user
-                    os.updated_by = user
-                    os.save()
+            # Atualiza todas as OS da cadeia (exceto a si mesma, que já foi salva)
+            # que ainda não estão concluídas.
+            OrdemServico.objects.filter(
+                cadeia_query,
+                deleted_at__isnull=True
+            ).exclude(
+                id=self.id
+            ).exclude(
+                status=self.Status.CONCLUIDA
+            ).update(
+                status=self.Status.CONCLUIDA,
+                data_conclusao=data_conclusao,
+                concluida_por=user,
+                updated_by=user,
+                updated_at=timezone.now()
+            )
     
-    def atualizar_status(self):
-        """
-        Atualiza automaticamente o status baseado no prazo.
-        Deve ser chamado periodicamente (cronjob ou ao acessar).
-        """
-        if self.status == self.Status.CONCLUIDA:
-            return
-        
-        if self.esta_vencida and self.status != self.Status.VENCIDA:
-            self.status = self.Status.VENCIDA
-            self.save(update_fields=['status'])
+    # ❌ MÉTODO OBSOLETO REMOVIDO (Risco 2: Ambiguidade)
+    # def atualizar_status(self): ...
 
     def save(self, *args, **kwargs):
-        # Gera o número da OS na primeira criação
+        """
+        ✅ CORRIGIDO (Risco 1): Protegido contra race condition na criação do numero_os.
+        """
+        # Gera o número da OS apenas na primeira criação
         if not self.pk:
-            ano = timezone.now().year
-            ultimo_os = OrdemServico.objects.filter(
-                numero_os__endswith=f"/{ano}"
-            ).order_by('id').last()
-            
-            novo_numero = (
-                int(ultimo_os.numero_os.split('/')[0]) + 1) if ultimo_os else 1
-            self.numero_os = f"{novo_numero:04d}/{ano}"
-
-        super(OrdemServico, self).save(*args, **kwargs)
+            with transaction.atomic():
+                ano = timezone.now().year
+                
+                # Trava a tabela para leitura (select_for_update)
+                # para impedir que duas criações peguem o mesmo último número
+                ultimo_os = OrdemServico.objects.select_for_update().filter(
+                    numero_os__endswith=f"/{ano}"
+                ).order_by('id').last()
+                
+                novo_numero = (
+                    int(ultimo_os.numero_os.split('/')[0]) + 1) if ultimo_os else 1
+                self.numero_os = f"{novo_numero:04d}/{ano}"
+                
+                # Salva DENTRO da transação atômica
+                super(OrdemServico, self).save(*args, **kwargs)
+        else:
+            # Salva normalmente para atualizações
+            super(OrdemServico, self).save(*args, **kwargs)
 
     def __str__(self):
         if self.numero_reiteracao > 0:

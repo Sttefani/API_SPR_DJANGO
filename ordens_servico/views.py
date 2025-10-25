@@ -4,7 +4,8 @@ from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.utils import timezone
-from django.db.models import Count, Q, Avg, F, ExpressionWrapper, fields
+# ✅ IMPORTS ADICIONADOS (para Risco 3) - Imports ok
+from django.db.models import Count, Q, Avg, F, ExpressionWrapper, fields, Sum
 from django.db.models.functions import TruncDate
 from datetime import timedelta
 
@@ -216,51 +217,13 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
     def pendentes_ciencia(self, request):
         """
         Retorna a quantidade de OS aguardando ciência do perito logado
+        ✅ CORRIGIDO (Risco 5): Removidos 'print()' de debug.
         """
         user = request.user
         
-        print("=" * 80)
-        print("🔍 DEBUG PENDENTES-CIENCIA")
-        print("=" * 80)
-        print(f"👤 Usuário logado: {user.username} (ID: {user.id})")
-        print(f"📧 Email: {user.email}")
-        print(f"👔 Nome: {user.nome_completo}")
-        print(f"🎭 Perfil: {user.perfil}")
-        print("-" * 80)
-        
         # APENAS PERITOS veem o banner
         if user.perfil == 'ADMINISTRATIVO':
-            print("❌ É ADMINISTRATIVO - retornando count=0")
             return Response({'count': 0, 'ordens': []})
-        
-        print("✅ É PERITO - buscando OS aguardando ciência...")
-        print("-" * 80)
-        
-        # BUSCA TODAS as OS com status AGUARDANDO_CIENCIA (sem filtro de perito)
-        todas_os_aguardando = OrdemServico.objects.filter(
-            status='AGUARDANDO_CIENCIA',
-            deleted_at__isnull=True
-        ).select_related('ocorrencia', 'ocorrencia__perito_atribuido')
-        
-        print(f"📊 TOTAL de OS aguardando ciência no sistema: {todas_os_aguardando.count()}")
-        print("-" * 80)
-        
-        if todas_os_aguardando.exists():
-            print("📋 LISTA DE TODAS AS OS AGUARDANDO CIÊNCIA:")
-            for os in todas_os_aguardando:
-                perito = os.ocorrencia.perito_atribuido
-                if perito:
-                    print(f"   • OS {os.numero_os}")
-                    print(f"     - Perito: {perito.nome_completo} (ID: {perito.id})")
-                    print(f"     - Ocorrência: {os.ocorrencia.numero_ocorrencia}")
-                    print(f"     - Status: {os.status}")
-                    print(f"     - Deleted: {os.deleted_at}")
-                else:
-                    print(f"   • OS {os.numero_os} - SEM PERITO ATRIBUÍDO!")
-            print("-" * 80)
-        else:
-            print("⚠️ NENHUMA OS com status AGUARDANDO_CIENCIA encontrada!")
-            print("-" * 80)
         
         # Busca OS aguardando ciência DO PERITO LOGADO
         ordens = OrdemServico.objects.filter(
@@ -268,18 +231,6 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             ocorrencia__perito_atribuido=user,
             deleted_at__isnull=True
         ).select_related('ocorrencia').order_by('-created_at')
-        
-        print(f"🎯 OS ATRIBUÍDAS AO USUÁRIO LOGADO: {ordens.count()}")
-        
-        if ordens.exists():
-            print("✅ ENCONTRADAS:")
-            for os in ordens:
-                print(f"   • {os.numero_os}")
-        else:
-            print("❌ NENHUMA OS encontrada para este perito!")
-            print(f"   Verifique se o perito ID {user.id} está atribuído nas OS listadas acima")
-        
-        print("=" * 80)
         
         # Serializa dados mínimos
         dados = []
@@ -509,18 +460,6 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         """
         Marca a OS como concluída (dá baixa).
         Apenas ADMINISTRATIVO pode concluir.
-        
-        Endpoint: POST /api/ordens-servico/{id}/concluir/
-        
-        Validações:
-        - Apenas admin pode concluir
-        - OS não pode estar já concluída
-        - Perito deve ter tomado ciência
-        
-        Retorna:
-        - 200 OK: OS concluída com sucesso
-        - 403 FORBIDDEN: Usuário sem permissão
-        - 400 BAD_REQUEST: Validação de negócio falhou
         """
         ordem_servico = self.get_object()
         
@@ -718,10 +657,10 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         # QuerySet base
         qs = OrdemServico.objects.filter(filtros)
         
-        # ✅ CORREÇÃO: Adicionar data atual para verificar vencimentos
+        # ✅ Data atual para verificar vencimentos
         data_atual = timezone.now().date()
         
-        # 1. RESUMO GERAL - ✅ CORRIGIDO
+        # 1. RESUMO GERAL - ✅ CORRIGIDO (Usa data_prazo)
         resumo_geral = {
             'total_emitidas': qs.count(),
             'aguardando_ciencia': qs.filter(status='AGUARDANDO_CIENCIA').count(),
@@ -734,7 +673,7 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             'concluidas': qs.filter(status='CONCLUIDA').count(),
         }
         
-        # 2. PRODUÇÃO POR PERITO - ✅ CORRIGIDO
+        # 2. PRODUÇÃO POR PERITO - ✅ OTIMIZADO (Risco 3, N+1)
         producao_por_perito = qs.values(
             'ocorrencia__perito_atribuido__nome_completo'
         ).annotate(
@@ -746,42 +685,42 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
                 data_prazo__lt=data_atual
             )),
             aguardando_ciencia=Count('id', filter=Q(status='AGUARDANDO_CIENCIA')),
+            
+            # ✅ CÁLCULO AGREGADO OTIMIZADO (Correção Risco 3 + SyntaxError)
+            cumpridas_no_prazo=Count('id', filter=Q(
+                status='CONCLUIDA',
+                # Compara a data da conclusão com a data do prazo
+                data_conclusao__date__lte=F('data_prazo') 
+            )),
+            cumpridas_com_atraso=Count('id', filter=Q(
+                status='CONCLUIDA',
+                 # Compara a data da conclusão com a data do prazo
+                data_conclusao__date__gt=F('data_prazo')
+            ))
         ).order_by('-total_emitidas')
         
+        # ✅ LOOP OTIMIZADO (Correção Risco 3)
         producao_detalhada = []
-        for perito in producao_por_perito:
-            perito_nome = perito['ocorrencia__perito_atribuido__nome_completo']
-            
-            os_concluidas = qs.filter(
-                ocorrencia__perito_atribuido__nome_completo=perito_nome,
-                status='CONCLUIDA'
-            )
-            
-            cumpridas_no_prazo = 0
-            cumpridas_com_atraso = 0
-            
-            for os in os_concluidas:
-                if os.concluida_com_atraso:
-                    cumpridas_com_atraso += 1
-                else:
-                    cumpridas_no_prazo += 1
+        for perito_data in producao_por_perito: # Renomeado para evitar conflito
+            concluidas = perito_data['concluidas']
+            cumpridas_no_prazo = perito_data['cumpridas_no_prazo']
             
             producao_detalhada.append({
-                'perito': perito_nome or 'Sem perito',
-                'total_emitidas': perito['total_emitidas'],
-                'concluidas': perito['concluidas'],
+                'perito': perito_data['ocorrencia__perito_atribuido__nome_completo'] or 'Sem perito',
+                'total_emitidas': perito_data['total_emitidas'],
+                'concluidas': concluidas,
                 'cumpridas_no_prazo': cumpridas_no_prazo,
-                'cumpridas_com_atraso': cumpridas_com_atraso,
-                'em_andamento': perito['em_andamento'],
-                'vencidas': perito['vencidas'],
-                'aguardando_ciencia': perito['aguardando_ciencia'],
+                'cumpridas_com_atraso': perito_data['cumpridas_com_atraso'],
+                'em_andamento': perito_data['em_andamento'],
+                'vencidas': perito_data['vencidas'],
+                'aguardando_ciencia': perito_data['aguardando_ciencia'],
                 'taxa_cumprimento_prazo': round(
-                    (cumpridas_no_prazo / perito['concluidas'] * 100) if perito['concluidas'] > 0 else 0,
+                    (cumpridas_no_prazo / concluidas * 100) if concluidas > 0 else 0,
                     1
                 )
             })
         
-        # 3. POR UNIDADE DEMANDANTE - ✅ CORRIGIDO
+        # 3. POR UNIDADE DEMANDANTE - ✅ CORRIGIDO (Usa data_prazo)
         por_unidade = qs.values(
             'unidade_demandante__nome'
         ).annotate(
@@ -794,7 +733,7 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             ))
         ).order_by('-total')
         
-        # 4. POR SERVIÇO PERICIAL - ✅ CORRIGIDO
+        # 4. POR SERVIÇO PERICIAL - ✅ CORRIGIDO (Usa data_prazo)
         por_servico = qs.values(
             'ocorrencia__servico_pericial__sigla',
             'ocorrencia__servico_pericial__nome'
@@ -817,19 +756,12 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             'terceira_ou_mais': qs.filter(numero_reiteracao__gte=3).count(),
         }
         
-        # 6. TAXA DE CUMPRIMENTO
-        os_concluidas_todas = qs.filter(status='CONCLUIDA')
-        total_concluidas = os_concluidas_todas.count()
-        
-        cumpridas_prazo_total = 0
-        cumpridas_atraso_total = 0
-        
-        for os in os_concluidas_todas:
-            if os.concluida_com_atraso:
-                cumpridas_atraso_total += 1
-            else:
-                cumpridas_prazo_total += 1
-        
+        # 6. TAXA DE CUMPRIMENTO - ✅ OTIMIZADO (Risco 3)
+        # Reutiliza os dados já agregados
+        total_concluidas = sum(p['concluidas'] for p in producao_por_perito)
+        cumpridas_prazo_total = sum(p['cumpridas_no_prazo'] for p in producao_por_perito)
+        cumpridas_atraso_total = sum(p['cumpridas_com_atraso'] for p in producao_por_perito)
+
         taxa_cumprimento = {
             'total_concluidas': total_concluidas,
             'cumpridas_no_prazo': cumpridas_prazo_total,
@@ -878,7 +810,7 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         evolucao_temporal = qs.filter(
             created_at__gte=doze_meses_atras
         ).annotate(
-            mes=TruncDate('created_at')
+            mes=TruncDate('created_at') # Use TruncMonth for monthly aggregation if needed
         ).values('mes').annotate(
             total=Count('id'),
             concluidas=Count('id', filter=Q(status='CONCLUIDA'))
@@ -900,17 +832,41 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
     def relatorios_gerenciais_pdf(self, request):
         """Gera PDF dos relatórios gerenciais"""
         from .pdf_generator import gerar_pdf_relatorios_gerenciais
-        
+        # ✅ Certifique-se de importar o User model se for buscar nomes de perito, etc.
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+
+
         # Obter dados do relatório
         response_data = self.relatorios_gerenciais(request)
         dados = response_data.data
-        
+
         # Preparar informações de filtros
         filtros_aplicados = {}
         if request.query_params.get('data_inicio'):
             filtros_aplicados['data_inicio'] = request.query_params.get('data_inicio')
         if request.query_params.get('data_fim'):
             filtros_aplicados['data_fim'] = request.query_params.get('data_fim')
-        # Adicionar outros filtros conforme necessário
-        
-        return gerar_pdf_relatorios_gerenciais(dados, filtros_aplicados)
+
+        # Adicionar outros filtros conforme necessário (perito_id, unidade_id, etc.)
+        perito_id_param = request.query_params.get('perito_id')
+        if perito_id_param:
+             try:
+                 # Busca o nome do perito para exibir no PDF
+                 perito = User.objects.get(pk=perito_id_param)
+                 filtros_aplicados['perito_nome'] = perito.nome_completo
+             except User.DoesNotExist:
+                 filtros_aplicados['perito_nome'] = f"ID {perito_id_param} (não encontrado)"
+        # Adicione lógica similar para unidade, serviço, status se desejar exibi-los.
+        if request.query_params.get('status'):
+            filtros_aplicados['status'] = request.query_params.get('status') # Exemplo
+
+        # ✅ PEGAR O USUÁRIO LOGADO
+        usuario_emissor = request.user
+
+        # ✅ CORREÇÃO: PASSAR O 'usuario_emissor' COMO TERCEIRO ARGUMENTO
+        return gerar_pdf_relatorios_gerenciais(
+            dados,
+            filtros_aplicados,
+            usuario_emissor  # <-- Adicionado aqui!
+        )
