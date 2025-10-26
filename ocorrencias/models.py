@@ -1,9 +1,10 @@
 # ocorrencias/models.py
 
 import datetime
-from django.db import models
+from django.db import models, transaction, IntegrityError
 from django.conf import settings
 from django.utils import timezone
+import time
 
 # Importando os modelos dos nossos outros apps
 from usuarios.models import AuditModel
@@ -163,14 +164,53 @@ class Ocorrencia(AuditModel):
         self.ip_reabertura = ip_address
         self.save()
 
-    # MÉTODO SAVE EXISTENTE
+    # ===== MÉTODO SAVE CORRIGIDO =====
     def save(self, *args, **kwargs):
+        # ===== GERAÇÃO DO NÚMERO DA OCORRÊNCIA (NOVA LÓGICA COM LOCK) =====
         if not self.pk:
-            now = datetime.datetime.now()
-            servico_sigla = self.servico_pericial.sigla
-            timestamp = now.strftime('%Y%m%d%H%M%S')
-            self.numero_ocorrencia = f"{timestamp}/{servico_sigla}"
+            with transaction.atomic():
+                now = datetime.datetime.now()
+                servico_sigla = self.servico_pericial.sigla
+                timestamp_base = now.strftime('%Y%m%d%H%M%S')
+                
+                # Número no formato original
+                self.numero_ocorrencia = f"{timestamp_base}/{servico_sigla}"
+                
+                # Tenta salvar até 10 vezes (caso haja duplicação rara)
+                tentativas = 0
+                max_tentativas = 10
+                
+                while tentativas < max_tentativas:
+                    try:
+                        # Tenta salvar com o número gerado
+                        self._executar_save(args, kwargs)
+                        return  # ✅ Sucesso! Sai do método
+                        
+                    except IntegrityError as e:
+                        # Se for erro de número duplicado, adiciona sufixo
+                        if 'numero_ocorrencia' in str(e) or 'unique' in str(e).lower():
+                            tentativas += 1
+                            nano = int(time.time() * 1000000) % 1000000
+                            self.numero_ocorrencia = f"{timestamp_base}/{servico_sigla}-{nano + tentativas}"
+                        else:
+                            # Se for outro tipo de IntegrityError, propaga
+                            raise
+                
+                # Se após 10 tentativas não conseguiu, levanta erro
+                raise IntegrityError(
+                    f"Não foi possível gerar número único após {max_tentativas} tentativas"
+                )
+        
+        # ===== PARA ATUALIZAÇÕES (quando já tem PK) =====
+        else:
+            self._executar_save(args, kwargs)
 
+    def _executar_save(self, args, kwargs):
+        """
+        Método auxiliar que executa toda a lógica de save
+        (separado para evitar duplicação de código)
+        """
+        # ===== ATUALIZAÇÃO DO HISTÓRICO =====
         if self.pk:
             try:
                 versao_antiga = Ocorrencia.objects.get(pk=self.pk)
@@ -178,18 +218,21 @@ class Ocorrencia(AuditModel):
                     self.historico_ultima_edicao = timezone.now()
             except Ocorrencia.DoesNotExist:
                 pass
-
+        
+        # ===== LÓGICA DE STATUS =====
         if self.status != self.Status.FINALIZADA:
             if self.perito_atribuido:
                 self.status = self.Status.EM_ANALISE
             else:
                 self.status = self.Status.AGUARDANDO_PERITO
-
+        
+        # ===== NORMALIZAÇÃO DE CAMPOS =====
         if self.numero_documento_origem:
             self.numero_documento_origem = self.numero_documento_origem.upper()
         if self.processo_sei_numero:
             self.processo_sei_numero = self.processo_sei_numero.upper()
-
+        
+        # ===== SALVA NO BANCO =====
         super(Ocorrencia, self).save(*args, **kwargs)
 
     def __str__(self):
@@ -199,6 +242,7 @@ class Ocorrencia(AuditModel):
         verbose_name = "Ocorrência"
         verbose_name_plural = "Ocorrências"
         ordering = ['-created_at']
+
 
 # --- INÍCIO DO NOVO CÓDIGO (SEGURO E ADITIVO) ---
 
@@ -218,7 +262,7 @@ class HistoricoVinculacao(models.Model):
         on_delete=models.SET_NULL, 
         null=True, 
         blank=True, 
-        related_name="+", # O '+' impede a criação de uma relação reversa, economizando recursos.
+        related_name="+",
         verbose_name="Procedimento Anterior"
     )
     procedimento_novo = models.ForeignKey(
@@ -244,6 +288,6 @@ class HistoricoVinculacao(models.Model):
     class Meta:
         verbose_name = "Histórico de Vinculação"
         verbose_name_plural = "Históricos de Vinculação"
-        ordering = ['-timestamp']    
-        
+        ordering = ['-timestamp']
+
 from .endereco_models import EnderecoOcorrencia, TipoOcorrencia
