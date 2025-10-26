@@ -240,9 +240,32 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get', 'post'])
     def finalizar(self, request, pk=None):
+        """Finaliza uma ocorrência com assinatura digital."""
         ocorrencia = self.get_object()
 
         if request.method == 'POST':
+            # Validação 1: Perito obrigatório
+            if not ocorrencia.perito_atribuido:
+                return Response({
+                    'error': (
+                        '❌ Não é possível finalizar esta ocorrência: Nenhum perito foi atribuído. '
+                        'É obrigatório que um perito seja designado para a ocorrência antes da finalização. '
+                        'Por favor, atribua um perito responsável e tente novamente.'
+                    )
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Validação 2: Status correto
+            if ocorrencia.status != Ocorrencia.Status.EM_ANALISE:
+                status_atual = ocorrencia.get_status_display()
+                return Response({
+                    'error': (
+                        f'❌ Não é possível finalizar esta ocorrência: Status atual é "{status_atual}". '
+                        'Apenas ocorrências com status "Em Análise" podem ser finalizadas. '
+                        'Verifique o status da ocorrência e tente novamente.'
+                    )
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Validação 3: Ordens de Serviço pendentes
             from ordens_servico.models import OrdemServico
             ordens_pendentes = ocorrencia.ordens_servico.exclude(
                 status=OrdemServico.Status.CONCLUIDA
@@ -250,26 +273,44 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
             if ordens_pendentes.exists():
                 numeros_os = list(ordens_pendentes.values_list('numero_os', flat=True))
-                return Response(
-                    {"error": f"Não é possível finalizar a ocorrência. As Ordens de Serviço a seguir ainda estão pendentes: {numeros_os}. Por favor, conclua ou cancele estas OS primeiro."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
+                return Response({
+                    'error': (
+                        f'❌ Não é possível finalizar a ocorrência: Existem Ordens de Serviço pendentes. '
+                        f'As seguintes OS precisam ser concluídas ou canceladas primeiro: {", ".join(numeros_os)}. '
+                        'Por favor, regularize essas ordens de serviço antes de finalizar a ocorrência.'
+                    )
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Validação 4: Já finalizada
             if ocorrencia.esta_finalizada:
-                return Response({'error': 'Esta ocorrência já foi finalizada.'}, status=status.HTTP_400_BAD_REQUEST)
-
+                finalizada_por = ocorrencia.finalizada_por.nome_completo if ocorrencia.finalizada_por else 'N/A'
+                data_finalizacao = ocorrencia.data_finalizacao.strftime('%d/%m/%Y às %H:%M') if ocorrencia.data_finalizacao else 'N/A'
+                return Response({
+                    'error': (
+                        '❌ Esta ocorrência já foi finalizada anteriormente. '
+                        f'Finalizada por: {finalizada_por} em {data_finalizacao}. '
+                        'Não é possível finalizar uma ocorrência que já está finalizada.'
+                    )
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Validação 5: Senha (via serializer)
             serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
 
+            # Finalização com assinatura
             ip_address = request.META.get('REMOTE_ADDR', '127.0.0.1')
             ocorrencia.finalizar_com_assinatura(request.user, ip_address)
 
             response_serializer = OcorrenciaDetailSerializer(ocorrencia, context={'request': request})
             return Response({
-                'message': 'Ocorrência finalizada com sucesso.',
+                'message': (
+                    f'✅ Ocorrência {ocorrencia.numero_ocorrencia} finalizada com sucesso! '
+                    f'Finalizada por: {request.user.nome_completo}.'
+                ),
                 'ocorrencia': response_serializer.data
             }, status=status.HTTP_200_OK)
 
+        # GET method - retorna formulário/info
         serializer = self.get_serializer(instance=ocorrencia)
         return Response(serializer.data)
 

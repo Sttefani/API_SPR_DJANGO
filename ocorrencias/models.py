@@ -148,7 +148,46 @@ class Ocorrencia(AuditModel):
         return not self.esta_finalizada
 
     def finalizar_com_assinatura(self, user, ip_address):
-        self.status = 'FINALIZADA'
+        """Finaliza a ocorrência com assinatura digital."""
+        from django.core.exceptions import ValidationError
+        
+        # Validação: Já finalizada
+        if self.esta_finalizada:
+            raise ValidationError(
+                f"Esta ocorrência já foi finalizada por {self.finalizada_por.nome_completo} "
+                f"em {self.data_finalizacao.strftime('%d/%m/%Y às %H:%M')}."
+            )
+        
+        # Validação: Perito obrigatório
+        if not self.perito_atribuido:
+            raise ValidationError(
+                "Não é possível finalizar uma ocorrência sem perito atribuído. "
+                "Atribua um perito responsável primeiro."
+            )
+        
+        # Validação: Status correto
+        if self.status != self.Status.EM_ANALISE:
+            raise ValidationError(
+                f"Apenas ocorrências com status 'Em Análise' podem ser finalizadas. "
+                f"Status atual: {self.get_status_display()}."
+            )
+        
+        # Validação: User válido
+        if not user or not user.is_authenticated:
+            raise ValidationError("Usuário inválido para assinatura digital.")
+        
+        # Validação: Perfil autorizado
+        if not (user.perfil in ['ADMINISTRATIVO', 'SUPER_ADMIN'] or user.is_superuser):
+            raise ValidationError(
+                f"Usuário {user.nome_completo} não tem permissão para finalizar ocorrências."
+            )
+        
+        # Validação: IP obrigatório
+        if not ip_address:
+            ip_address = '127.0.0.1'
+        
+        # Realiza a finalização
+        self.status = self.Status.FINALIZADA
         self.data_finalizacao = timezone.now()
         self.finalizada_por = user
         self.data_assinatura_finalizacao = timezone.now()
@@ -156,11 +195,45 @@ class Ocorrencia(AuditModel):
         self.save()
 
     def reabrir(self, user, motivo, ip_address):
-        self.status = 'EM_ANALISE'
+        """Reabre uma ocorrência finalizada."""
+        from django.core.exceptions import ValidationError
+        
+        # Validação: Deve estar finalizada
+        if not self.esta_finalizada:
+            raise ValidationError(
+                "Esta ocorrência não está finalizada. Apenas ocorrências finalizadas podem ser reabertas."
+            )
+        
+        # Validação: Motivo obrigatório
+        if not motivo or not motivo.strip():
+            raise ValidationError(
+                "O motivo da reabertura é obrigatório. Por favor, forneça uma justificativa detalhada."
+            )
+        
+        if len(motivo.strip()) < 10:
+            raise ValidationError(
+                "O motivo da reabertura é muito curto. Por favor, forneça uma justificativa mais detalhada (mínimo 10 caracteres)."
+            )
+        
+        # Validação: User válido e Super Admin
+        if not user or not user.is_authenticated:
+            raise ValidationError("Usuário inválido para reabertura.")
+        
+        if not user.is_superuser:
+            raise ValidationError(
+                f"Usuário {user.nome_completo} não tem permissão para reabrir ocorrências. Apenas Super Administradores podem reabrir ocorrências finalizadas."
+            )
+        
+        # Validação: IP obrigatório
+        if not ip_address:
+            ip_address = '127.0.0.1'
+        
+        # Realiza a reabertura
+        self.status = self.Status.EM_ANALISE
         self.data_finalizacao = None
         self.reaberta_por = user
         self.data_reabertura = timezone.now()
-        self.motivo_reabertura = motivo
+        self.motivo_reabertura = motivo.strip()
         self.ip_reabertura = ip_address
         self.save()
 

@@ -246,6 +246,18 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         instance = self.instance
         request = self.context.get('request')
         user = request.user
+        # ===== VALIDAÇÃO GERAL: Se tem perito, só ele ou super admin editam =====
+        if instance.perito_atribuido:
+            if not user.is_superuser and user.id != instance.perito_atribuido.id:
+                perito_nome = instance.perito_atribuido.nome_completo
+                raise serializers.ValidationError({
+                    "non_field_errors": [
+                        f"🔒 Acesso Restrito: Esta ocorrência está atribuída ao perito {perito_nome}.",
+                        "Apenas o perito atribuído ou um Super Administrador podem editar esta ocorrência.",
+                        "Se necessário, solicite que o perito atribuído faça a alteração ou contate um administrador."
+                    ]
+                })
+        
         
         # --- INÍCIO DA CORREÇÃO ---
         classificacao = data.get('classificacao')
@@ -255,7 +267,7 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
             )
         # --- FIM DA CORREÇÃO ---
 
-        if instance.esta_finalizada and not user.is_superuser:
+        if instance.esta_finalizada:
             raise serializers.ValidationError(
                 "Esta ocorrência está finalizada e não pode ser editada."
             )
