@@ -1,6 +1,9 @@
 from django.core.management.base import BaseCommand
-from ocorrencias.endereco_models import EnderecoOcorrencia
+from ocorrencias.endereco_models import EnderecoOcorrencia # Importe seu model
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Command(BaseCommand):
     help = 'Geocodifica endereços externos sem coordenadas'
@@ -22,15 +25,18 @@ class Command(BaseCommand):
         limite = options.get('limite')
         dry_run = options.get('dry_run')
         
-        # Buscar endereços sem coordenadas
+        # Buscar endereços sem coordenadas (e que não são manuais)
         enderecos = EnderecoOcorrencia.objects.filter(
             tipo='EXTERNA',
-            latitude__isnull=True
-        ).select_related('ocorrencia', 'ocorrencia__cidade')
+            latitude__isnull=True,
+            coordenadas_manuais=False, # Boa prática adicionar isso
+            logradouro__isnull=False    # Só busca se tiver o que buscar
+        ).select_related('ocorrencia', 'ocorrencia__cidade').exclude(logradouro__exact='')
         
         if limite:
             enderecos = enderecos[:limite]
         
+        # O .count() aqui é mais eficiente
         total = enderecos.count()
         
         if total == 0:
@@ -56,20 +62,23 @@ class Command(BaseCommand):
             self.stdout.write(f"\n[{i}/{total}] Processando ID {endereco.id}:")
             self.stdout.write(f"   Ocorrência: {endereco.ocorrencia.numero_ocorrencia}")
             self.stdout.write(f"   Endereço: {endereco.logradouro or 'Sem logradouro'}")
-            self.stdout.write(f"   Cidade: {endereco.ocorrencia.cidade.nome if endereco.ocorrencia.cidade else 'Sem cidade'}")
             
-            # Chamar método de geocodificação
-            resultado = endereco.geocodificar()
+            # ✅✅✅ CORREÇÃO APLICADA AQUI ✅✅✅
+            # Seu método no models.py chama-se "geocodificar_async"
+            resultado = endereco.geocodificar_async()
             
             if resultado:
                 if not dry_run:
-                    # Salvar no banco
-                    endereco.save()
+                    # O seu geocodificar_async() já salva! 
+                    # Não precisamos salvar de novo.
                     sucesso += 1
                     self.stdout.write(self.style.SUCCESS(f"   ✅ SALVO: {endereco.latitude}, {endereco.longitude}"))
                 else:
+                    # No dry-run, o geocodificar_async() não salvará (ele é esperto)
+                    # Mas precisamos simular o que ele encontraria
                     sucesso += 1
-                    self.stdout.write(self.style.SUCCESS(f"   ✅ ENCONTRADO (não salvo): {endereco.latitude}, {endereco.longitude}"))
+                    # Não podemos ler lat/lng porque não foi salvo
+                    self.stdout.write(self.style.SUCCESS(f"   ✅ ENCONTRADO (simulado)")) 
             else:
                 falha += 1
                 self.stdout.write(self.style.WARNING(f"   ⚠️  NÃO ENCONTRADO"))
@@ -87,7 +96,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.WARNING(f"⚠️  Falhas: {falha} endereços"))
         self.stdout.write(f"📊 Total processado: {total}")
         
-        if sucesso > 0:
+        if sucesso > 0 and total > 0: # Evitar divisão por zero
             percentual = (sucesso / total) * 100
             self.stdout.write(self.style.SUCCESS(f"🎯 Taxa de sucesso: {percentual:.1f}%"))
         

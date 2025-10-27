@@ -5,26 +5,27 @@ from .models import Cargo
 from .serializers import CargoSerializer, CargoLixeiraSerializer
 from .permissions import CargoPermission
 
+
 class CargoViewSet(viewsets.ModelViewSet):
-    queryset = Cargo.objects.all().order_by('nome')
+    queryset = Cargo.objects.all().order_by("nome")
     permission_classes = [CargoPermission]
     filter_backends = [filters.SearchFilter]
-    search_fields = ['nome']
-    
+    search_fields = ["nome"]
+
     def get_queryset(self):
         """Sobrescreve queryset para actions específicas"""
-        if self.action in ['restaurar', 'lixeira']:
+        if self.action in ["restaurar", "lixeira"]:
             return Cargo.all_objects.all()
         return super().get_queryset()
 
     def get_serializer_class(self):
-        if self.action == 'lixeira':
+        if self.action == "lixeira":
             return CargoLixeiraSerializer
         return CargoSerializer
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=["get"])
     def dropdown(self, request):
-        queryset = Cargo.objects.all().order_by('nome')
+        queryset = Cargo.objects.all().order_by("nome")
         serializer = CargoSerializer(queryset, many=True)
         return Response(serializer.data)
 
@@ -39,17 +40,22 @@ class CargoViewSet(viewsets.ModelViewSet):
         instance.soft_delete(user=self.request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=["get"])
     def lixeira(self, request):
-        lixeira_qs = Cargo.all_objects.filter(deleted_at__isnull=False).order_by('-deleted_at')
+        lixeira_qs = Cargo.all_objects.filter(deleted_at__isnull=False).order_by(
+            "-deleted_at"
+        )
         serializer = self.get_serializer(lixeira_qs, many=True)
         return Response(serializer.data)
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=["post"])
     def restaurar(self, request, pk=None):
         instance = self.get_object()
         if instance.deleted_at is None:
-            return Response({'detail': 'Este cargo não está deletado.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "Este cargo não está deletado."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         instance.restore()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)

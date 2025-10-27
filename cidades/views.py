@@ -5,26 +5,27 @@ from .models import Cidade
 from .serializers import CidadeSerializer, CidadeLixeiraSerializer
 from .permissions import CidadePermission
 
+
 class CidadeViewSet(viewsets.ModelViewSet):
-    queryset = Cidade.objects.all().order_by('nome')
+    queryset = Cidade.objects.all().order_by("nome")
     permission_classes = [CidadePermission]
     filter_backends = [filters.SearchFilter]
-    search_fields = ['nome']
-    
+    search_fields = ["nome"]
+
     def get_queryset(self):
         """Sobrescreve queryset para actions específicas"""
-        if self.action in ['restaurar', 'lixeira']:
+        if self.action in ["restaurar", "lixeira"]:
             return Cidade.all_objects.all()
         return super().get_queryset()
 
     def get_serializer_class(self):
-        if self.action == 'lixeira':
+        if self.action == "lixeira":
             return CidadeLixeiraSerializer
         return CidadeSerializer
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=["get"])
     def dropdown(self, request):
-        queryset = Cidade.objects.all().order_by('nome')
+        queryset = Cidade.objects.all().order_by("nome")
         serializer = CidadeSerializer(queryset, many=True)
         return Response(serializer.data)
 
@@ -39,23 +40,28 @@ class CidadeViewSet(viewsets.ModelViewSet):
         instance.soft_delete(user=self.request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=["get"])
     def lixeira(self, request):
-        lixeira_qs = Cidade.all_objects.filter(deleted_at__isnull=False).order_by('-deleted_at')
+        lixeira_qs = Cidade.all_objects.filter(deleted_at__isnull=False).order_by(
+            "-deleted_at"
+        )
         serializer = self.get_serializer(lixeira_qs, many=True)
         return Response(serializer.data)
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=["post"])
     def restaurar(self, request, pk=None):
         instance = self.get_object()
         if instance.deleted_at is None:
-            return Response({'detail': 'Esta cidade não está deletada.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "Esta cidade não está deletada."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         instance.restore()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
-    
-    @action(detail=False, methods=['get'], pagination_class=None)
+
+    @action(detail=False, methods=["get"], pagination_class=None)
     def dropdown(self, request):
-        queryset = self.get_queryset().order_by('nome')  
+        queryset = self.get_queryset().order_by("nome")
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)

@@ -8,6 +8,7 @@ class OrdemServicoPermission(BasePermission):
     Permissão customizada para o modelo OrdemServico, com regras
     específicas baseadas no perfil e na ação.
     """
+
     message = "Você não tem permissão para executar esta ação."
 
     def has_permission(self, request, view):
@@ -20,12 +21,14 @@ class OrdemServicoPermission(BasePermission):
             return False
 
         # REGRA: Apenas ADMIN e SUPER_ADMIN podem criar OS ou reiterar
-        if view.action in ['create', 'reiterar']:
-            if user.perfil in ['ADMINISTRATIVO', 'SUPER_ADMIN']:
+        if view.action in ["create", "reiterar"]:
+            if user.perfil in ["ADMINISTRATIVO", "SUPER_ADMIN"]:
                 return True
-            self.message = "Apenas administrativos podem criar/reiterar Ordens de Serviço."
+            self.message = (
+                "Apenas administrativos podem criar/reiterar Ordens de Serviço."
+            )
             return False
-        
+
         # Para outras actions, a permissão será verificada no has_object_permission
         return True
 
@@ -48,8 +51,14 @@ class OrdemServicoPermission(BasePermission):
         # =====================================================================
         # ACTIONS DO ADMINISTRATIVO
         # =====================================================================
-        if view.action in ['update', 'partial_update', 'concluir', 'reiterar', 'restaurar']:
-            if user.perfil == 'ADMINISTRATIVO':
+        if view.action in [
+            "update",
+            "partial_update",
+            "concluir",
+            "reiterar",
+            "restaurar",
+        ]:
+            if user.perfil == "ADMINISTRATIVO":
                 return True
             self.message = "Apenas administrativos podem executar esta ação."
             return False
@@ -57,16 +66,18 @@ class OrdemServicoPermission(BasePermission):
         # =====================================================================
         # DELETAR - SÓ SUPER ADMIN
         # =====================================================================
-        if view.action == 'destroy':
-            self.message = "Apenas Super Administradores podem deletar Ordens de Serviço."
+        if view.action == "destroy":
+            self.message = (
+                "Apenas Super Administradores podem deletar Ordens de Serviço."
+            )
             return False
 
         # =====================================================================
         # ACTIONS DO PERITO (destinatário)
         # =====================================================================
-        if view.action in ['tomar_ciencia', 'iniciar_trabalho', 'justificar_atraso']:
+        if view.action in ["tomar_ciencia", "iniciar_trabalho", "justificar_atraso"]:
             # Verifica se o usuário é o perito destinatário
-            if user.perfil == 'PERITO':
+            if user.perfil == "PERITO":
                 if perito_destinatario and user.id == perito_destinatario.id:
                     return True
                 self.message = "Apenas o perito designado pode executar esta ação."
@@ -77,22 +88,24 @@ class OrdemServicoPermission(BasePermission):
         # =====================================================================
         # VISUALIZAR E GERAR PDFs
         # =====================================================================
-        if view.action in ['retrieve', 'gerar_pdf', 'gerar_pdf_oficial']:
+        if view.action in ["retrieve", "gerar_pdf", "gerar_pdf_oficial"]:
             # ADMINISTRATIVO pode ver todas
-            if user.perfil == 'ADMINISTRATIVO':
+            if user.perfil == "ADMINISTRATIVO":
                 return True
-            
+
             # PERITO só pode ver as suas
-            if user.perfil == 'PERITO':
+            if user.perfil == "PERITO":
                 if perito_destinatario and user.id == perito_destinatario.id:
                     return True
-                self.message = "Você só pode visualizar suas próprias Ordens de Serviço."
+                self.message = (
+                    "Você só pode visualizar suas próprias Ordens de Serviço."
+                )
                 return False
-        
+
         # =====================================================================
         # LISTAGEM DE PDF
         # =====================================================================
-        if view.action == 'gerar_listagem_pdf':
+        if view.action == "gerar_listagem_pdf":
             # Qualquer um com acesso à ocorrência pode gerar listagem
             return True
 

@@ -19,137 +19,116 @@ class OrdemServico(AuditModel):
     Representa uma Ordem de Serviço, um documento formal com dados
     espelhados da ocorrência e seus próprios campos.
     """
+
     class Status(models.TextChoices):
-        AGUARDANDO_CIENCIA = 'AGUARDANDO_CIENCIA', 'Aguardando Ciência'
-        ABERTA = 'ABERTA', 'Aberta'
-        EM_ANDAMENTO = 'EM_ANDAMENTO', 'Em Andamento'
+        AGUARDANDO_CIENCIA = "AGUARDANDO_CIENCIA", "Aguardando Ciência"
+        ABERTA = "ABERTA", "Aberta"
+        EM_ANDAMENTO = "EM_ANDAMENTO", "Em Andamento"
         # VENCIDA = 'VENCIDA', 'Vencida'  <- ❌ REMOVIDO (Risco 2: Ambiguidade)
-        CONCLUIDA = 'CONCLUIDA', 'Concluída'
+        CONCLUIDA = "CONCLUIDA", "Concluída"
 
     # --- Relação Principal ---
     ocorrencia = models.ForeignKey(
-        Ocorrencia,
-        on_delete=models.CASCADE,
-        related_name='ordens_servico'
+        Ocorrencia, on_delete=models.CASCADE, related_name="ordens_servico"
     )
-    
-    
+
     # --- Dados da Própria OS ---
-    numero_os = models.CharField(
-        max_length=20,
-        unique=True,
-        editable=False
-    )
-    
+    numero_os = models.CharField(max_length=20, unique=True, editable=False)
+
     prazo_dias = models.PositiveIntegerField(
         verbose_name="Prazo para Conclusão (em dias)"
     )
-    
+
     # ✅ NOVO CAMPO: Data limite para conclusão (calculada após ciência)
     data_prazo = models.DateField(
         null=True,
         blank=True,
         verbose_name="Data Limite",
-        help_text="Data calculada automaticamente: data_ciencia + prazo_dias"
+        help_text="Data calculada automaticamente: data_ciencia + prazo_dias",
     )
-    
+
     texto_padrao = models.TextField(
         editable=False,
-        default="O DIRETOR, NO USO DE SUAS ATRIBUIÇÕES LEGAIS, EMITE A PRESENTE ORDEM DE SERVIÇO, DETERMINANDO A REALIZAÇÃO DOS EXAMES E CONFECÇÃO DO LAUDO PERICIAL."
+        default="O DIRETOR, NO USO DE SUAS ATRIBUIÇÕES LEGAIS, EMITE A PRESENTE ORDEM DE SERVIÇO, DETERMINANDO A REALIZAÇÃO DOS EXAMES E CONFECÇÃO DO LAUDO PERICIAL.",
     )
-    
+
     status = models.CharField(
-        max_length=20,
-        choices=Status.choices,
-        default=Status.AGUARDANDO_CIENCIA
+        max_length=20, choices=Status.choices, default=Status.AGUARDANDO_CIENCIA
     )
-    
+
     data_conclusao = models.DateTimeField(null=True, blank=True)
-    
+
     # --- OBSERVAÇÕES E JUSTIFICATIVAS ---
     observacoes_administrativo = models.TextField(
         blank=True,
         verbose_name="Observações do Administrativo",
-        help_text="Observações internas sobre esta OS (não aparecem no PDF oficial)"
+        help_text="Observações internas sobre esta OS (não aparecem no PDF oficial)",
     )
-    
+
     justificativa_atraso = models.TextField(
         blank=True,
         verbose_name="Justificativa de Atraso",
-        help_text="Justificativa do perito em caso de atraso na entrega"
+        help_text="Justificativa do perito em caso de atraso na entrega",
     )
-    
+
     # --- HIERARQUIA DE COMANDO ---
     ordenada_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        related_name='os_ordenadas',
-        verbose_name="Ordenada por (Diretor/Chefe)"
+        related_name="os_ordenadas",
+        verbose_name="Ordenada por (Diretor/Chefe)",
     )
-    
+
     # --- REITERAÇÃO ---
     os_original = models.ForeignKey(
-        'self',
+        "self",
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        related_name='reiteracoes',
-        verbose_name="OS Original"
+        related_name="reiteracoes",
+        verbose_name="OS Original",
     )
-    
+
     numero_reiteracao = models.PositiveIntegerField(
         default=0,
         verbose_name="Número da Reiteração",
-        help_text="0 = Original, 1 = 1ª Reiteração, etc."
+        help_text="0 = Original, 1 = 1ª Reiteração, etc.",
     )
-    
+
     # --- DADOS ESPELHADOS DA OCORRÊNCIA (Snapshot no momento da criação) ---
     unidade_demandante = models.ForeignKey(
-        UnidadeDemandante,
-        on_delete=models.PROTECT,
-        null=True
+        UnidadeDemandante, on_delete=models.PROTECT, null=True
     )
-    
+
     autoridade_demandante = models.ForeignKey(
-        Autoridade,
-        on_delete=models.PROTECT,
-        null=True
+        Autoridade, on_delete=models.PROTECT, null=True
     )
-    
+
     procedimento = models.ForeignKey(
-        ProcedimentoCadastrado,
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True
+        ProcedimentoCadastrado, on_delete=models.PROTECT, null=True, blank=True
     )
-    
+
     # --- DADOS ESPECÍFICOS DA OS ---
     tipo_documento_referencia = models.ForeignKey(
         TipoDocumento,
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        verbose_name="Documento de Referência"
+        verbose_name="Documento de Referência",
     )
-    
+
     numero_documento_referencia = models.CharField(
-        max_length=50,
-        blank=True,
-        verbose_name="Nº do Documento de Referência"
+        max_length=50, blank=True, verbose_name="Nº do Documento de Referência"
     )
-    
+
     processo_sei_referencia = models.CharField(
-        max_length=50,
-        blank=True,
-        verbose_name="Processo SEI de Referência"
+        max_length=50, blank=True, verbose_name="Processo SEI de Referência"
     )
-    
+
     processo_judicial_referencia = models.CharField(
-        max_length=50,
-        blank=True,
-        verbose_name="Processo Judicial de Referência"
+        max_length=50, blank=True, verbose_name="Processo Judicial de Referência"
     )
 
     # --- DADOS DE CIÊNCIA E VISUALIZAÇÃO (Assinatura do Perito) ---
@@ -157,36 +136,36 @@ class OrdemServico(AuditModel):
         null=True,
         blank=True,
         verbose_name="Primeira Visualização",
-        help_text="Quando o perito visualizou a OS pela primeira vez (mesmo sem dar ciência)"
+        help_text="Quando o perito visualizou a OS pela primeira vez (mesmo sem dar ciência)",
     )
-    
+
     ciente_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        related_name='os_cientes',
-        verbose_name="Perito Ciente"
+        related_name="os_cientes",
+        verbose_name="Perito Ciente",
     )
-    
+
     data_ciencia = models.DateTimeField(null=True, blank=True)
     ip_ciencia = models.GenericIPAddressField(null=True, blank=True)
-    
+
     # ✅ NOVO CAMPO: Quem concluiu a OS
     concluida_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='ordens_concluidas',
-        verbose_name='Concluída por',
-        help_text='Usuário que deu baixa/concluiu esta OS'
+        related_name="ordens_concluidas",
+        verbose_name="Concluída por",
+        help_text="Usuário que deu baixa/concluiu esta OS",
     )
-    
+
     # ========================================
     # PROPRIEDADES CALCULADAS
     # ========================================
-    
+
     @property
     def data_vencimento(self):
         """
@@ -196,21 +175,20 @@ class OrdemServico(AuditModel):
         if self.data_prazo:
             # Converte DateField para DateTime (início do dia) com timezone
             return timezone.datetime.combine(
-                self.data_prazo, 
-                timezone.datetime.min.time()
+                self.data_prazo, timezone.datetime.min.time()
             ).replace(tzinfo=timezone.get_current_timezone())
-        
+
         if self.data_ciencia:
             return self.data_ciencia + timedelta(days=self.prazo_dias)
-        
+
         return None
-    
+
     @property
     def dias_desde_emissao(self):
         """Quantos dias se passaram desde que a OS foi emitida"""
         delta = timezone.now() - self.created_at
         return delta.days
-    
+
     @property
     def dias_restantes(self):
         """
@@ -219,25 +197,25 @@ class OrdemServico(AuditModel):
         """
         if not self.data_prazo or self.status == self.Status.CONCLUIDA:
             return None
-            
+
         hoje = timezone.now().date()
         delta = self.data_prazo - hoje
-        
+
         return delta.days
-    
+
     @property
     def esta_vencida(self):
         """Verifica se o prazo venceu"""
         if self.status == self.Status.CONCLUIDA:
             return False
-        
+
         if not self.data_prazo:
             return False
-        
+
         # Compara apenas as datas (ignora horário)
         hoje = timezone.now().date()
         return self.data_prazo < hoje
-    
+
     @property
     def urgencia(self):
         """
@@ -249,23 +227,23 @@ class OrdemServico(AuditModel):
         - None: Aguardando ciência
         """
         if self.status == self.Status.CONCLUIDA:
-            return 'concluida'
-        
+            return "concluida"
+
         dias = self.dias_restantes
         if dias is None:
             return None  # Aguardando ciência
-        
+
         if dias < 0:
-            return 'vermelho'  # Vencida
+            return "vermelho"  # Vencida
         elif dias == 0:
-            return 'vermelho'  # Vence hoje
+            return "vermelho"  # Vence hoje
         elif dias <= 2:
-            return 'laranja'   # 1-2 dias
+            return "laranja"  # 1-2 dias
         elif dias <= 4:
-            return 'amarelo'   # 3-4 dias
+            return "amarelo"  # 3-4 dias
         else:
-            return 'verde'     # 5+ dias
-    
+            return "verde"  # 5+ dias
+
     @property
     def concluida_com_atraso(self):
         """
@@ -273,12 +251,12 @@ class OrdemServico(AuditModel):
         """
         if self.status != self.Status.CONCLUIDA or not self.data_conclusao:
             return None
-        
+
         if not self.data_vencimento:
             return None
-        
+
         return self.data_conclusao > self.data_vencimento
-    
+
     @property
     def percentual_prazo_consumido(self):
         """
@@ -287,17 +265,17 @@ class OrdemServico(AuditModel):
         """
         if not self.data_ciencia or self.status == self.Status.CONCLUIDA:
             return 0
-        
+
         total_segundos = timedelta(days=self.prazo_dias).total_seconds()
-        
+
         if total_segundos == 0:
             return 0
-            
+
         decorrido = (timezone.now() - self.data_ciencia).total_seconds()
-        
+
         percentual = (decorrido / total_segundos) * 100
         return min(int(percentual), 100)
-    
+
     @property
     def prazo_acumulado_total(self):
         """
@@ -314,9 +292,9 @@ class OrdemServico(AuditModel):
             # É uma reiteração, busca a original e soma tudo
             original = self.os_original
             if not original:
-                return self.prazo_dias # Retorna apenas seu próprio prazo se for órfã
+                return self.prazo_dias  # Retorna apenas seu próprio prazo se for órfã
             return original.prazo_acumulado_total
-    
+
     @property
     def historico_completo(self):
         """
@@ -324,25 +302,31 @@ class OrdemServico(AuditModel):
         """
         if self.numero_reiteracao == 0:
             # É a original
-            todas = [self] + list(self.reiteracoes.filter(
-                deleted_at__isnull=True).order_by('numero_reiteracao'))
+            todas = [self] + list(
+                self.reiteracoes.filter(deleted_at__isnull=True).order_by(
+                    "numero_reiteracao"
+                )
+            )
         else:
             # É uma reiteração, busca a original
             original = self.os_original
             if not original:
-                 return [self] # Retorna apenas a si mesma se for órfã
-            todas = [original] + list(original.reiteracoes.filter(
-                deleted_at__isnull=True).order_by('numero_reiteracao'))
-        
+                return [self]  # Retorna apenas a si mesma se for órfã
+            todas = [original] + list(
+                original.reiteracoes.filter(deleted_at__isnull=True).order_by(
+                    "numero_reiteracao"
+                )
+            )
+
         return todas
-    
+
     # ========================================
     # MÉTODOS
     # ========================================
-    
+
     def ocultar_detalhes_ate_ciencia(self):
         return self.status == self.Status.AGUARDANDO_CIENCIA
-    
+
     def registrar_visualizacao(self):
         """
         Registra a primeira vez que o perito visualizou a OS.
@@ -350,8 +334,8 @@ class OrdemServico(AuditModel):
         """
         if not self.data_primeira_visualizacao:
             self.data_primeira_visualizacao = timezone.now()
-            self.save(update_fields=['data_primeira_visualizacao'])
-    
+            self.save(update_fields=["data_primeira_visualizacao"])
+
     def tomar_ciencia(self, user, ip_address):
         """
         Registra a ciência do perito na OS com assinatura digital.
@@ -362,16 +346,18 @@ class OrdemServico(AuditModel):
             self.data_ciencia = timezone.now()
             self.ip_ciencia = ip_address
             self.status = self.Status.ABERTA
-            
+
             # ✅ CALCULA E SALVA A DATA LIMITE
-            self.data_prazo = (self.data_ciencia + timedelta(days=self.prazo_dias)).date()
-            
+            self.data_prazo = (
+                self.data_ciencia + timedelta(days=self.prazo_dias)
+            ).date()
+
             # Registra visualização se ainda não foi registrada
             if not self.data_primeira_visualizacao:
                 self.data_primeira_visualizacao = self.data_ciencia
-            
+
             self.save()
-    
+
     def iniciar_trabalho(self, user):
         """
         Marca a OS como EM_ANDAMENTO quando o perito começa a trabalhar.
@@ -380,7 +366,7 @@ class OrdemServico(AuditModel):
             self.status = self.Status.EM_ANDAMENTO
             self.updated_by = user
             self.save()
-    
+
     def justificar_atraso(self, justificativa, user):
         """
         Permite que o perito justifique o atraso na entrega.
@@ -388,31 +374,32 @@ class OrdemServico(AuditModel):
         self.justificativa_atraso = justificativa
         self.updated_by = user
         self.save()
-    
-    def reiterar(self, prazo_dias, ordenada_por, user, observacoes=''):
+
+    def reiterar(self, prazo_dias, ordenada_por, user, observacoes=""):
         """
         Cria uma OS de reiteração com prazo menor.
         Só permite reiterar a OS mais recente da cadeia.
         """
         from django.core.exceptions import ValidationError
-        
+
         # Determina qual é a OS original
         original = self if self.numero_reiteracao == 0 else self.os_original
-        
+
         # ✅ VALIDAÇÃO: Verifica se esta é a última OS da cadeia
-        ultima_reiteracao = OrdemServico.objects.filter(
-            os_original=original,
-            deleted_at__isnull=True
-        ).order_by('-numero_reiteracao').first()
-        
+        ultima_reiteracao = (
+            OrdemServico.objects.filter(os_original=original, deleted_at__isnull=True)
+            .order_by("-numero_reiteracao")
+            .first()
+        )
+
         # Se existem reiterações, só pode reiterar a mais recente
         if ultima_reiteracao and ultima_reiteracao.id != self.id:
             raise ValidationError(
-                f'Não é possível reiterar esta OS. '
-                f'Você deve reiterar a OS mais recente: {ultima_reiteracao.numero_os} '
-                f'({ultima_reiteracao.numero_reiteracao}ª Reiteração)'
+                f"Não é possível reiterar esta OS. "
+                f"Você deve reiterar a OS mais recente: {ultima_reiteracao.numero_os} "
+                f"({ultima_reiteracao.numero_reiteracao}ª Reiteração)"
             )
-        
+
         # Cria a nova reiteração
         nova_os = OrdemServico.objects.create(
             ocorrencia=self.ocorrencia,
@@ -428,10 +415,10 @@ class OrdemServico(AuditModel):
             processo_judicial_referencia=self.processo_judicial_referencia,
             os_original=original,
             numero_reiteracao=self.numero_reiteracao + 1,
-            created_by=user
+            created_by=user,
         )
         return nova_os
-        
+
     def concluir(self, user):
         """
         Marca a OS como concluída.
@@ -439,38 +426,33 @@ class OrdemServico(AuditModel):
         ✅ OTIMIZADO (Risco 4): Usa .update() para performance.
         """
         data_conclusao = timezone.now()
-        
+
         # Conclui a OS atual
         self.status = self.Status.CONCLUIDA
         self.data_conclusao = data_conclusao
         self.concluida_por = user
         self.updated_by = user
-        self.save() # Salva a si mesma
-        
+        self.save()  # Salva a si mesma
+
         # Determina a OS original
         os_original = self if self.numero_reiteracao == 0 else self.os_original
-        
+
         if os_original:
             # Define a query para toda a cadeia (original + reiterações)
             cadeia_query = Q(id=os_original.id) | Q(os_original=os_original)
-            
+
             # Atualiza todas as OS da cadeia (exceto a si mesma, que já foi salva)
             # que ainda não estão concluídas.
-            OrdemServico.objects.filter(
-                cadeia_query,
-                deleted_at__isnull=True
-            ).exclude(
+            OrdemServico.objects.filter(cadeia_query, deleted_at__isnull=True).exclude(
                 id=self.id
-            ).exclude(
-                status=self.Status.CONCLUIDA
-            ).update(
+            ).exclude(status=self.Status.CONCLUIDA).update(
                 status=self.Status.CONCLUIDA,
                 data_conclusao=data_conclusao,
                 concluida_por=user,
                 updated_by=user,
-                updated_at=timezone.now()
+                updated_at=timezone.now(),
             )
-    
+
     # ❌ MÉTODO OBSOLETO REMOVIDO (Risco 2: Ambiguidade)
     # def atualizar_status(self): ...
 
@@ -482,17 +464,21 @@ class OrdemServico(AuditModel):
         if not self.pk:
             with transaction.atomic():
                 ano = timezone.now().year
-                
+
                 # Trava a tabela para leitura (select_for_update)
                 # para impedir que duas criações peguem o mesmo último número
-                ultimo_os = OrdemServico.objects.select_for_update().filter(
-                    numero_os__endswith=f"/{ano}"
-                ).order_by('id').last()
-                
+                ultimo_os = (
+                    OrdemServico.objects.select_for_update()
+                    .filter(numero_os__endswith=f"/{ano}")
+                    .order_by("id")
+                    .last()
+                )
+
                 novo_numero = (
-                    int(ultimo_os.numero_os.split('/')[0]) + 1) if ultimo_os else 1
+                    (int(ultimo_os.numero_os.split("/")[0]) + 1) if ultimo_os else 1
+                )
                 self.numero_os = f"{novo_numero:04d}/{ano}"
-                
+
                 # Salva DENTRO da transação atômica
                 super(OrdemServico, self).save(*args, **kwargs)
         else:
@@ -507,4 +493,4 @@ class OrdemServico(AuditModel):
     class Meta:
         verbose_name = "Ordem de Serviço"
         verbose_name_plural = "Ordens de Serviço"
-        ordering = ['-created_at']
+        ordering = ["-created_at"]
