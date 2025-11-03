@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:14
+    container_name: spr_ocorrencias_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      - POSTGRES_DB=api_spr_db
+      - POSTGRES_USER=mudar_usuario
+      - POSTGRES_PASSWORD=mudar_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seu_usuario -d seu_banco_de_dados"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  web:
+    build: .
+    container_name: spr_ocorrencias_web
+    command: gunicorn spr.wsgi:application --bind 0.0.0.0:8000
+    volumes:
+      - media_volume:/app/media
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - SECRET_KEY='preencher_secret_key_app_django'
+      - DEBUG=1
+      - ALLOWED_HOSTS='localhost,127.0.0.1' 
+      - DATABASE_URL=postgres://seu_usuario:sua_senha@db:5432/seu_banco_de_dados
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 64G
+
+volumes:
+  postgres_data:
+  media_volume:
