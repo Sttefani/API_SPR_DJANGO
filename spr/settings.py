@@ -56,9 +56,6 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',  # Adicione esta linha
     'django_filters',
     'django_extensions',
-
-    
-
     'usuarios',
     'servicos_periciais',  # Adicione esta linha
     'cidades',
