@@ -1,8 +1,8 @@
-version: '3.8'
+version: '3.9'
 
 services:
   db:
-    image: postgres:14
+    image: postgres:15
     container_name: spr_ocorrencias_db
     ports:
       - "5432:5432"
@@ -10,14 +10,17 @@ services:
       - postgres_data:/var/lib/postgresql/data/
     environment:
       - POSTGRES_DB=api_spr_db
-      - POSTGRES_USER=mudar_usuario
-      - POSTGRES_PASSWORD=mudar_password
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - TZ=America/Boa_Vista
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U seu_usuario -d seu_banco_de_dados"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d api_spr_db"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: always
+    networks:
+      - spr_network
 
   web:
     build: .
@@ -25,22 +28,28 @@ services:
     command: gunicorn spr.wsgi:application --bind 0.0.0.0:8000
     volumes:
       - media_volume:/app/media
+      - cron_data:/etc
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
     environment:
-      - SECRET_KEY='preencher_secret_key_app_django'
-      - DEBUG=1
-      - ALLOWED_HOSTS='localhost,127.0.0.1' 
-      - DATABASE_URL=postgres://seu_usuario:sua_senha@db:5432/seu_banco_de_dados
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/api_spr_db
+      - TZ=America/Boa_Vista
     restart: always
     deploy:
       resources:
         limits:
           memory: 64G
+    networks:
+      - spr_network
 
 volumes:
   postgres_data:
   media_volume:
+  cron_data:
+
+networks:
+  spr_network:
+    driver: bridge
