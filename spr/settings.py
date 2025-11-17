@@ -18,7 +18,6 @@ import os
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# <-- ADICIONE AS 3 LINHAS ABAIXO -->
 # Configuração do django-environ
 env = environ.Env(
     # Valor padrão para o DEBUG (False se não estiver no .env)
@@ -31,7 +30,6 @@ environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-# <-- MODIFICADO: Agora lê do arquivo .env -->
 SECRET_KEY = env('SECRET_KEY')
 
 DEBUG = env('DEBUG')
