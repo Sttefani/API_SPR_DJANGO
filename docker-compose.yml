@@ -2,7 +2,7 @@ version: '3.9'
 
 services:
   db:
-    image: postgres:15
+    image: postgres:17.7
     container_name: spr_ocorrencias_db
     ports:
       - "5432:5432"
@@ -25,7 +25,7 @@ services:
   web:
     build: .
     container_name: spr_ocorrencias_web
-    command: gunicorn spr.wsgi:application --bind 0.0.0.0:8000
+    command: gunicorn spr.wsgi:application --bind 0.0.0.0:8000 
     volumes:
       - media_volume:/app/media
       - cron_data:/etc

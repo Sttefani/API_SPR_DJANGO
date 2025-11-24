@@ -1189,7 +1189,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             end = end_date.split("T")[0]
 
             queryset = queryset.filter(
-                data_fato__range=[start, end], data_fato__isnull=False
+                created_at__range=[start, end], created_at__isnull=False
             )
 
         # 3. Busca Otimizada (.values): Pega só o necessário para pintar o calendário
@@ -1197,7 +1197,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         dados = queryset.values(
             "id",
             "numero_ocorrencia",
-            "data_fato",
+            "created_at",
             "hora_fato",
             "status",
             "classificacao__nome",  # Para mostrar no título
@@ -1212,18 +1212,16 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             "FINALIZADA": "#198754",  # Verde
         }
 
-        from datetime import datetime, time
+        from datetime import datetime
 
         for item in dados:
-            # Monta a data/hora completa para o calendário posicionar corretamente
-            d_fato = item["data_fato"]
-            h_fato = (
-                item["hora_fato"] if item["hora_fato"] else time(9, 0)
-            )  # Padrão 9h se não tiver hora
+            d_cadastro = item["created_at"]
+            data_completa = datetime.fromisoformat(str(d_cadastro))
+            h_cadastro = data_completa.time().replace(second=0, microsecond=0)
 
             # Cria string ISO (ex: "2025-11-21T14:30:00")
-            dt_iso = datetime.combine(d_fato, h_fato).isoformat()
-
+            dt_iso = datetime.combine(d_cadastro, h_cadastro).isoformat()
+            print (str(dt_iso))
             titulo = f"{item['numero_ocorrencia']}"
             if item.get("classificacao__nome"):
                 titulo += f" - {item['classificacao__nome']}"
@@ -1236,7 +1234,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                     "color": cores.get(
                         item["status"], "#6c757d"
                     ),  # Cinza se status for estranho
-                    "allDay": item["hora_fato"] is None,  # Se não tem hora, é dia todo
+                    "allDay": h_cadastro is None,  # Se não tem hora, é dia todo
                     "extendedProps": {"status": item["status"]},
                 }
             )
