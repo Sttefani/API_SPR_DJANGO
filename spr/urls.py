@@ -7,7 +7,12 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from movimentacoes.views import MovimentacaoViewSet
 from ordens_servico.views import OrdemServicoViewSet
 from spr.views import EstatisticasCriminaisView, OcorrenciasGeoView
-from usuarios.views import UserRegistrationViewSet, UserManagementViewSet, MyTokenObtainPairView, ChangePasswordView
+from usuarios.views import (
+    UserRegistrationViewSet,
+    UserManagementViewSet,
+    MyTokenObtainPairView,
+    ChangePasswordView,
+)
 from servicos_periciais.views import ServicoPericialViewSet
 from cidades.views import CidadeViewSet
 from cargos.views import CargoViewSet
@@ -25,50 +30,66 @@ from ocorrencias.views_relatorios import RelatoriosGerenciaisViewSet
 # ROTEADOR NÍVEL 1 (PRINCIPAL)
 # =============================================================================
 router = routers.DefaultRouter()
-router.register(r'usuarios', UserManagementViewSet)
-router.register(r'servicos-periciais', ServicoPericialViewSet)
-router.register(r'cidades', CidadeViewSet)
-router.register(r'cargos', CargoViewSet)
-router.register(r'autoridades', AutoridadeViewSet)
-router.register(r'unidades-demandantes', UnidadeDemandanteViewSet)
-router.register(r'procedimentos', ProcedimentoViewSet)
-router.register(r'classificacoes', ClassificacaoOcorrenciaViewSet)
-router.register(r'exames', ExameViewSet)
-router.register(r'procedimentos-cadastrados', ProcedimentoCadastradoViewSet)
-router.register(r'tipos-documento', TipoDocumentoViewSet)
-router.register(r'ocorrencias', OcorrenciaViewSet)
-router.register(r'enderecos-ocorrencia', EnderecoOcorrenciaViewSet, basename='endereco-ocorrencia')
-router.register(r'relatorios-gerenciais', RelatoriosGerenciaisViewSet, basename='relatorios-gerenciais')
-router.register(r'registrar', UserRegistrationViewSet, basename='user-registration')
-router.register(r'ordens-servico', OrdemServicoViewSet, basename='ordens-servico')
+router.register(r"usuarios", UserManagementViewSet)
+router.register(r"servicos-periciais", ServicoPericialViewSet)
+router.register(r"cidades", CidadeViewSet)
+router.register(r"cargos", CargoViewSet)
+router.register(r"autoridades", AutoridadeViewSet)
+router.register(r"unidades-demandantes", UnidadeDemandanteViewSet)
+router.register(r"procedimentos", ProcedimentoViewSet)
+router.register(r"classificacoes", ClassificacaoOcorrenciaViewSet)
+router.register(r"exames", ExameViewSet)
+router.register(r"procedimentos-cadastrados", ProcedimentoCadastradoViewSet)
+router.register(r"tipos-documento", TipoDocumentoViewSet)
+router.register(r"ocorrencias", OcorrenciaViewSet)
+router.register(
+    r"enderecos-ocorrencia", EnderecoOcorrenciaViewSet, basename="endereco-ocorrencia"
+)
+router.register(
+    r"relatorios-gerenciais",
+    RelatoriosGerenciaisViewSet,
+    basename="relatorios-gerenciais",
+)
+router.register(r"registrar", UserRegistrationViewSet, basename="user-registration")
+router.register(r"ordens-servico", OrdemServicoViewSet, basename="ordens-servico")
 
 # =============================================================================
 # ROTEADORES ANINHADOS
 # =============================================================================
-ocorrencias_router = routers.NestedDefaultRouter(router, r'ocorrencias', lookup='ocorrencia')
-ocorrencias_router.register(r'movimentacoes', MovimentacaoViewSet, basename='ocorrencia-movimentacoes')
+ocorrencias_router = routers.NestedDefaultRouter(
+    router, r"ocorrencias", lookup="ocorrencia"
+)
+ocorrencias_router.register(
+    r"movimentacoes", MovimentacaoViewSet, basename="ocorrencia-movimentacoes"
+)
 
 # =============================================================================
 # DEFINIÇÃO FINAL DAS URLS
 # =============================================================================
 urlpatterns = [
-    path('admin/', admin.site.urls),
-
+    path("admin/", admin.site.urls),
+    path(
+        "api/ocorrencias/dados-calendario/",
+        OcorrenciaViewSet.as_view({"get": "dados_calendario"}),
+        name="ocorrencias-calendario",
+    ),
     # Inclui todas as rotas de todos os roteadores
-    path('api/', include(router.urls)),
-    path('api/', include(ocorrencias_router.urls)),
-    
+    path("api/", include(router.urls)),
+    path("api/", include(ocorrencias_router.urls)),
     # Análise Criminal
-    path('api/analise-criminal/estatisticas/', EstatisticasCriminaisView.as_view(), name='analise-estatisticas'),
-    path('api/analise-criminal/mapa/', OcorrenciasGeoView.as_view(), name='analise-mapa'),
-
+    path(
+        "api/analise-criminal/estatisticas/",
+        EstatisticasCriminaisView.as_view(),
+        name="analise-estatisticas",
+    ),
+    path(
+        "api/analise-criminal/mapa/", OcorrenciasGeoView.as_view(), name="analise-mapa"
+    ),
     # Autenticação
-    path('api-auth/', include('rest_framework.urls')),
-    path('api/change-password/', ChangePasswordView.as_view(), name='change-password'),
-    path('api/token/', MyTokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-    
+    path("api-auth/", include("rest_framework.urls")),
+    path("api/change-password/", ChangePasswordView.as_view(), name="change-password"),
+    path("api/token/", MyTokenObtainPairView.as_view(), name="token_obtain_pair"),
+    path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     # Inclui as rotas do app de Inteligência Artificial
-    path('api/ia/', include('IA.urls')),
+    path("api/ia/", include("IA.urls")),
 ]
-
