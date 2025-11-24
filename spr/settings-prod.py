@@ -12,13 +12,13 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from datetime import timedelta
 from pathlib import Path
-import environ
+import dj_database_url
+import environ  
 import os       
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Configuração do django-environ
 env = environ.Env(
     # Valor padrão para o DEBUG (False se não estiver no .env)
     DEBUG=(bool, False)
@@ -32,9 +32,16 @@ environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = env('SECRET_KEY')
 
+# SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env('DEBUG')
 
-ALLOWED_HOSTS = []
+#'ALLOWED_HOSTS' VEM DO DOCKER-COMPOSE
+ALLOWED_HOSTS = [
+    'localhost', 
+    '127.0.0.1',
+    '192.168.12.30', 
+    '192.168.12.33' 
+]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -51,7 +58,7 @@ INSTALLED_APPS = [
     'usuarios',
     'servicos_periciais',  
     'cidades',
-    'cargos',       
+    'cargos',      
     'autoridades',
     'unidades_demandantes',
     'procedimentos',
@@ -66,8 +73,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',  
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware', 
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -97,16 +105,10 @@ WSGI_APPLICATION = 'spr.wsgi.application'
 
 
 # Database
+
+#'DATABASE_URL' VEM DO DOCKER-COMPOSE
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'api_spr_db',    
-        'USER': 'postgres',   
-        'PASSWORD': env('DB_PASSWORD'),  
-        'HOST': 'localhost',         
-        'PORT': '5432',
-        'OPTIONS': {'client_encoding': 'UTF8'},
-    }
+    'default': dj_database_url.config(default=os.environ.get('DATABASE_URL'))
 }
 
 # Password validation
@@ -127,22 +129,20 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
 LANGUAGE_CODE = 'pt-br'
-
 TIME_ZONE = 'America/Boa_Vista'
-
 USE_I18N = True
-
 USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -167,10 +167,25 @@ REST_FRAMEWORK = {
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:4200",
     "http://127.0.0.1:4200",
+    "http://192.168.12.30",
+    "http://192.168.12.33",
+    "http://192.168.12.30:4200",
+    "http://192.168.12.33:4200",
 ]
+
 CORS_ALLOW_CREDENTIALS = True
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:4200",
+    "http://127.0.0.1:4200",
+    "http://192.168.12.30",
+    "http://192.168.12.33",
+    "http://192.168.12.30:4200",
+    "http://192.168.12.33:4200",
+]
+
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),  
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
@@ -189,3 +204,7 @@ SIMPLE_JWT = {
 }
 
 GROQ_API_KEY = env('GROQ_API_KEY')
+
+# Configuração de arquivos de mídia
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
