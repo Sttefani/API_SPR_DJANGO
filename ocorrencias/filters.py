@@ -7,6 +7,8 @@ from django.utils import timezone
 from datetime import timedelta
 from .models import Ocorrencia
 
+class CharInFilter(django_filters.BaseInFilter, django_filters.CharFilter):
+    pass
 
 class OcorrenciaFilter(django_filters.FilterSet):
     
@@ -130,6 +132,7 @@ class OcorrenciaFilter(django_filters.FilterSet):
         choices=Ocorrencia.Status.choices,
         label='Status'
     )
+    status__in = CharInFilter(field_name='status', lookup_expr='in')
     
     # ===== FILTROS PERSONALIZADOS =====
     prazo_status = django_filters.ChoiceFilter(
@@ -169,7 +172,7 @@ class OcorrenciaFilter(django_filters.FilterSet):
     class Meta:
         model = Ocorrencia
         fields = [
-            'numero_ocorrencia', 'status', 'servico_pericial', 'cidade',
+            'numero_ocorrencia', 'status', 'status__in', 'servico_pericial', 'cidade',
             'unidade_demandante', 'autoridade', 'perito_atribuido',
             'classificacao', 'procedimento_cadastrado'
         ]
