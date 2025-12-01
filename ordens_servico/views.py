@@ -406,7 +406,7 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             if ordenada_por_id_val:
                 try:
                     # Assume que 'ordenada_por_id' no serializer valida que é um PK válido
-                    ordenada_por_obj = User.objects.get(pk=ordenada_por_id_val)
+                    ordenada_por_obj = User.objects.get(pk=ordenada_por_id_val.id)
                 except User.DoesNotExist:
                     # Se o serializer não validou, levantamos erro aqui
                     raise ValidationError(
