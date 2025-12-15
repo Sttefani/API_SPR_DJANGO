@@ -18,6 +18,38 @@ from classificacoes.models import ClassificacaoOcorrencia
 from exames.models import Exame
 
 
+# ============================================================================
+# NOVO MODEL: Controle de Sequencial Mensal
+# ============================================================================
+class SequencialOcorrencia(models.Model):
+    """
+    Controla o sequencial de numeração das ocorrências por ano.
+    Formato: AAMMNNNN/SIGLA (ex: 260100001/NIC, 260200002/NIC...)
+
+    - AA = Ano (2 dígitos)
+    - MM = Mês do cadastro (01-12)
+    - NNNNN = Sequencial contínuo no ano (zera só em janeiro)
+
+    O sequencial reinicia apenas a cada ano.
+    Suporta até 99.999 ocorrências por ano.
+    """
+
+    ano = models.PositiveSmallIntegerField(unique=True, verbose_name="Ano (2 dígitos)")
+    ultimo_sequencial = models.PositiveIntegerField(
+        default=0, verbose_name="Último Sequencial"
+    )
+
+    class Meta:
+        verbose_name = "Sequencial de Ocorrência"
+        verbose_name_plural = "Sequenciais de Ocorrências"
+
+    def __str__(self):
+        return f"Ano 20{self.ano:02d} - Último sequencial: {self.ultimo_sequencial}"
+
+
+# ============================================================================
+# MODEL PRINCIPAL: Ocorrência (com nova lógica de numeração)
+# ============================================================================
 class Ocorrencia(AuditModel):
     class Status(models.TextChoices):
         AGUARDANDO_PERITO = "AGUARDANDO_PERITO", "Aguardando Atribuição de Perito"
@@ -249,19 +281,48 @@ class Ocorrencia(AuditModel):
         self.ip_reabertura = ip_address
         self.save()
 
-    # ===== MÉTODO SAVE CORRIGIDO =====
+    # =========================================================================
+    # MÉTODO SAVE COM NOVA LÓGICA DE NUMERAÇÃO
+    # Formato: AAMMNNNN/SIGLA (ex: 260100001/NIC, 260200002/NIC...)
+    # - AA = Ano (2 dígitos)
+    # - MM = Mês do cadastro (01-12)
+    # - NNNNN = Sequencial contínuo no ano (zera só em janeiro)
+    # Suporta até 99.999 ocorrências por ano
+    # =========================================================================
     def save(self, *args, **kwargs):
-        # ===== GERAÇÃO DO NÚMERO DA OCORRÊNCIA (NOVA LÓGICA COM LOCK) =====
+        # ===== GERAÇÃO DO NÚMERO DA OCORRÊNCIA (SEQUENCIAL ANUAL COM MÊS) =====
         if not self.pk:
             with transaction.atomic():
                 now = datetime.datetime.now()
                 servico_sigla = self.servico_pericial.sigla
-                timestamp_base = now.strftime("%Y%m%d%H%M%S")
 
-                # Número no formato original
-                self.numero_ocorrencia = f"{timestamp_base}/{servico_sigla}"
+                # Pega o ano com 2 dígitos e o mês
+                ano_2digitos = now.year % 100  # 2026 -> 26
+                mes = now.month  # 1-12
 
-                # Tenta salvar até 10 vezes (caso haja duplicação rara)
+                # Busca ou cria o registro de sequencial para este ANO (com lock para concorrência)
+                # O sequencial é por ANO, não por mês!
+                (
+                    sequencial_obj,
+                    created,
+                ) = SequencialOcorrencia.objects.select_for_update().get_or_create(
+                    ano=ano_2digitos, defaults={"ultimo_sequencial": 0}
+                )
+
+                # Incrementa o sequencial
+                sequencial_obj.ultimo_sequencial += 1
+                sequencial_obj.save()
+
+                # Monta o número: AAMMNNNN (ex: 260100001)
+                # O mês aparece no número, mas o sequencial é contínuo no ano
+                numero_base = (
+                    f"{ano_2digitos:02d}{mes:02d}{sequencial_obj.ultimo_sequencial:05d}"
+                )
+
+                # Formato final: 260100001/SIGLA
+                self.numero_ocorrencia = f"{numero_base}/{servico_sigla}"
+
+                # Tenta salvar até 10 vezes (caso haja duplicação rara por concorrência extrema)
                 tentativas = 0
                 max_tentativas = 10
 
@@ -272,13 +333,15 @@ class Ocorrencia(AuditModel):
                         return  # ✅ Sucesso! Sai do método
 
                     except IntegrityError as e:
-                        # Se for erro de número duplicado, adiciona sufixo
+                        # Se for erro de número duplicado, incrementa e tenta novamente
                         if "numero_ocorrencia" in str(e) or "unique" in str(e).lower():
                             tentativas += 1
-                            nano = int(time.time() * 1000000) % 1000000
-                            self.numero_ocorrencia = (
-                                f"{timestamp_base}/{servico_sigla}-{nano + tentativas}"
-                            )
+                            # Recarrega e incrementa o sequencial
+                            sequencial_obj.refresh_from_db()
+                            sequencial_obj.ultimo_sequencial += 1
+                            sequencial_obj.save()
+                            numero_base = f"{ano_2digitos:02d}{mes:02d}{sequencial_obj.ultimo_sequencial:05d}"
+                            self.numero_ocorrencia = f"{numero_base}/{servico_sigla}"
                         else:
                             # Se for outro tipo de IntegrityError, propaga
                             raise
@@ -331,9 +394,9 @@ class Ocorrencia(AuditModel):
         ordering = ["-created_at"]
 
 
-# --- INÍCIO DO NOVO CÓDIGO (SEGURO E ADITIVO) ---
-
-
+# ============================================================================
+# MODEL: Histórico de Vinculação (sem alterações)
+# ============================================================================
 class HistoricoVinculacao(models.Model):
     """
     Modelo para registrar (auditar) a troca de um procedimento vinculado a uma ocorrência.
