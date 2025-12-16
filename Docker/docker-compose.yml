@@ -1,23 +1,24 @@
 version: '3.9'
 
 services:
-  db:
+  db_principal:
     image: postgres:17.7
-    container_name: spr_ocorrencias_db
+    container_name: spr_criminalistica_db_principal
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data/
+      - ./postgres.conf:/etc/postgresql/postgresql.conf
+      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf
     environment:
       - POSTGRES_DB=api_spr_db
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
       - TZ=America/Boa_Vista
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d api_spr_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    command: >
+      postgres
+      -c config_file=/etc/postgresql/postgresql.conf
+      -c hba_file=/etc/postgresql/pg_hba.conf
     restart: always
     networks:
       - spr_network

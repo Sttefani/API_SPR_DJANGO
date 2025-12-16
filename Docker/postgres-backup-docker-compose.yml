@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  postgres-backup:
+    image: postgres:17.7
+    container_name: spr_criminalistica_db_backup
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      PGPASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_standby_data:/var/lib/postgresql/data
+    command: >
+      bash -c "
+      if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+        rm -rf /var/lib/postgresql/data/*;
+        pg_basebackup -h 192.168.100.79 -D /var/lib/postgresql/data -U postgres -Fp -Xs -P -R -S standby_slot;
+      fi;
+      exec postgres;
+      "
+
+
+volumes:
+  pg_standby_data:
