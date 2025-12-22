@@ -391,7 +391,7 @@ class Ocorrencia(AuditModel):
     class Meta:
         verbose_name = "Ocorrência"
         verbose_name_plural = "Ocorrências"
-        ordering = ["-created_at"]
+        ordering = ["created_at"]
 
 
 # ============================================================================

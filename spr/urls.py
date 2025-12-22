@@ -1,3 +1,7 @@
+# SPR-CRIMINALÍSTICA - Sistema de Organização Pericial
+# Desenvolvido por: Perito Criminal Sttefani Ribeiro
+# Versão 1.0 - 2025
+
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework_nested import routers
