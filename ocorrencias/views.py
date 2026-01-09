@@ -2,7 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
-from django.db.models import Q, Count, F, Case, When
+from django.db.models import Q, Count, F, Case, When, Sum  # <--- ADICIONADO SUM
 from django.db.models.functions import Coalesce
 from datetime import timedelta, datetime
 from ocorrencias.endereco_models import EnderecoOcorrencia
@@ -10,7 +10,7 @@ from servicos_periciais.models import ServicoPericial
 from usuarios.models import User
 from classificacoes.models import ClassificacaoOcorrencia
 
-from .models import Ocorrencia
+from .models import Ocorrencia, OcorrenciaExame  # <--- ADICIONADO OcorrenciaExame
 from .serializers import (
     EnderecoOcorrenciaSerializer,
     OcorrenciaCreateSerializer,
@@ -72,7 +72,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action == "relatorios_gerenciais":
             return [PodeVerRelatoriosGerenciais()]
-        if self.action in ["adicionar_exames", "remover_exames"]:
+        if self.action in ["adicionar_exames", "remover_exames", "definir_exames"]:
             return [PeritoAtribuidoRequired()]
         if self.action == "finalizar":
             return [PodeFinalizarOcorrencia()]
@@ -574,7 +574,12 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        ocorrencia.exames_solicitados.add(*exames_ids)
+        # ADAPTADO PARA TABELA INTERMEDIÁRIA
+        for eid in exames_ids:
+            OcorrenciaExame.objects.get_or_create(
+                ocorrencia=ocorrencia, exame_id=eid, defaults={"quantidade": 1}
+            )
+
         serializer = OcorrenciaDetailSerializer(
             ocorrencia, context={"request": request}
         )
@@ -609,20 +614,12 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # ADAPTADO PARA TABELA INTERMEDIÁRIA
         if exames_ids:
-            exames_atuais = list(
-                ocorrencia.exames_solicitados.values_list("id", flat=True)
-            )
-            ids_nao_vinculados = set(exames_ids) - set(exames_atuais)
-            if ids_nao_vinculados:
-                return Response(
-                    {
-                        "error": f"Exames não vinculados à ocorrência: {list(ids_nao_vinculados)}"
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+            OcorrenciaExame.objects.filter(
+                ocorrencia=ocorrencia, exame_id__in=exames_ids
+            ).delete()
 
-        ocorrencia.exames_solicitados.remove(*exames_ids)
         serializer = OcorrenciaDetailSerializer(
             ocorrencia, context={"request": request}
         )
@@ -630,6 +627,9 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def definir_exames(self, request, pk=None):
+        """
+        Define exames com suporte a quantidade.
+        """
         ocorrencia = self.get_object()
 
         if ocorrencia.esta_finalizada:
@@ -644,41 +644,50 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         if ocorrencia.perito_atribuido:
             if not user.is_superuser and user.id != ocorrencia.perito_atribuido.id:
                 return Response(
-                    {
-                        "error": "Apenas o perito atribuído pode alterar os exames desta ocorrência."
-                    },
+                    {"error": "Apenas o perito atribuído pode alterar os exames."},
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
-        exames_ids = request.data.get("exames_ids", [])
+        # Suporta ambos os formatos (apenas IDs ou lista de objetos com qtd)
+        exames_data = request.data.get("exames")
+        exames_ids = request.data.get("exames_ids")
 
-        if not isinstance(exames_ids, list):
-            return Response(
-                {"error": "O campo 'exames_ids' deve ser uma lista de IDs."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        OcorrenciaExame.objects.filter(ocorrencia=ocorrencia).delete()
+        novos_objetos = []
 
-        if exames_ids:
-            from exames.models import Exame
+        if exames_data and isinstance(exames_data, list):
+            for item in exames_data:
+                if isinstance(item, dict):
+                    exame_id = item.get("id")
+                    qtd = int(item.get("quantidade", 1))
+                else:
+                    exame_id = item
+                    qtd = 1
 
-            existing_ids = list(
-                Exame.objects.filter(id__in=exames_ids).values_list("id", flat=True)
-            )
-            invalid_ids = set(exames_ids) - set(existing_ids)
-            if invalid_ids:
-                return Response(
-                    {"error": f"Exames inválidos: {list(invalid_ids)}"},
-                    status=status.HTTP_400_BAD_REQUEST,
+                if exame_id:
+                    novos_objetos.append(
+                        OcorrenciaExame(
+                            ocorrencia=ocorrencia, exame_id=exame_id, quantidade=qtd
+                        )
+                    )
+
+        elif exames_ids and isinstance(exames_ids, list):
+            for exame_id in exames_ids:
+                novos_objetos.append(
+                    OcorrenciaExame(
+                        ocorrencia=ocorrencia, exame_id=exame_id, quantidade=1
+                    )
                 )
 
-        ocorrencia.exames_solicitados.set(exames_ids)
+        if novos_objetos:
+            OcorrenciaExame.objects.bulk_create(novos_objetos)
 
         serializer = OcorrenciaDetailSerializer(
             ocorrencia, context={"request": request}
         )
         return Response(
             {
-                "message": f"{len(exames_ids)} exames definidos para a ocorrência.",
+                "message": f"{len(novos_objetos)} exames definidos com sucesso.",
                 "ocorrencia": serializer.data,
             },
             status=status.HTTP_200_OK,
@@ -730,18 +739,21 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
     def exames_atuais(self, request, pk=None):
         ocorrencia = self.get_object()
 
-        from exames.serializers import ExameNestedSerializer
+        # Usar o novo serializer se disponível (importando dentro para evitar ciclo)
+        from .serializers import OcorrenciaExameSerializer
 
-        serializer = ExameNestedSerializer(
-            ocorrencia.exames_solicitados.all().order_by("codigo"), many=True
+        # Busca da tabela intermediária
+        qs = OcorrenciaExame.objects.filter(ocorrencia=ocorrencia).select_related(
+            "exame"
         )
+        serializer = OcorrenciaExameSerializer(qs, many=True)
 
         return Response(
             {
                 "ocorrencia_id": ocorrencia.id,
                 "numero_ocorrencia": ocorrencia.numero_ocorrencia,
                 "exames_atuais": serializer.data,
-                "total_exames": ocorrencia.exames_solicitados.count(),
+                "total_exames": qs.count(),
             }
         )
 
@@ -869,7 +881,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 (total_minhas / total_servico * 100) if total_servico > 0 else 0
             )
 
-            # ✅ OTIMIZADO: Uma query só usando annotate
+            # ✅ AQUI: Soma de quantidades (total_exames)
             por_servico_qs = (
                 ServicoPericial.objects.filter(
                     id__in=servicos_ids, deleted_at__isnull=True
@@ -880,18 +892,25 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                         filter=Q(
                             ocorrencias__in=minhas, ocorrencias__deleted_at__isnull=True
                         ),
-                    )
+                    ),
+                    total_exames=Coalesce(
+                        Sum(
+                            "exames__ocorrenciaexame__quantidade",
+                            filter=Q(exames__ocorrenciaexame__ocorrencia__in=minhas),
+                        ),
+                        0,
+                    ),
                 )
-                .values("sigla", "nome", "total")
+                .values("sigla", "nome", "total", "total_exames")
                 .order_by("-total")
             )
 
-            # Formata pra manter compatibilidade com frontend
             por_servico = [
                 {
                     "servico_pericial__sigla": item["sigla"],
                     "servico_pericial__nome": item["nome"],
                     "total": item["total"],
+                    "total_exames": item["total_exames"],  # Envia para o front
                 }
                 for item in por_servico_qs
             ]
@@ -940,7 +959,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 status="FINALIZADA", data_finalizacao__gte=inicio_mes
             )
 
-            # ✅ OTIMIZADO: Uma query só usando annotate
             por_servico_qs = (
                 ServicoPericial.objects.filter(
                     id__in=servicos_ids, deleted_at__isnull=True
@@ -951,18 +969,25 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                         filter=Q(
                             ocorrencias__in=todas, ocorrencias__deleted_at__isnull=True
                         ),
-                    )
+                    ),
+                    total_exames=Coalesce(
+                        Sum(
+                            "exames__ocorrenciaexame__quantidade",
+                            filter=Q(exames__ocorrenciaexame__ocorrencia__in=todas),
+                        ),
+                        0,
+                    ),
                 )
-                .values("sigla", "nome", "total")
+                .values("sigla", "nome", "total", "total_exames")
                 .order_by("-total")
             )
 
-            # Formata pra manter compatibilidade com frontend
             por_servico = [
                 {
                     "servico_pericial__sigla": item["sigla"],
                     "servico_pericial__nome": item["nome"],
                     "total": item["total"],
+                    "total_exames": item["total_exames"],
                 }
                 for item in por_servico_qs
             ]
@@ -1010,7 +1035,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 status="FINALIZADA", data_finalizacao__gte=inicio_mes
             )
 
-            # Define quais serviços buscar
             if servico_id:
                 servicos_ids = [int(servico_id)]
             else:
@@ -1020,7 +1044,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                     )
                 )
 
-            # ✅ OTIMIZADO: Uma query só usando annotate
             por_servico_qs = (
                 ServicoPericial.objects.filter(
                     id__in=servicos_ids, deleted_at__isnull=True
@@ -1031,18 +1054,25 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                         filter=Q(
                             ocorrencias__in=todas, ocorrencias__deleted_at__isnull=True
                         ),
-                    )
+                    ),
+                    total_exames=Coalesce(
+                        Sum(
+                            "exames__ocorrenciaexame__quantidade",
+                            filter=Q(exames__ocorrenciaexame__ocorrencia__in=todas),
+                        ),
+                        0,
+                    ),
                 )
-                .values("sigla", "nome", "total")
+                .values("sigla", "nome", "total", "total_exames")
                 .order_by("-total")
             )
 
-            # Formata pra manter compatibilidade com frontend
             por_servico = [
                 {
                     "servico_pericial__sigla": item["sigla"],
                     "servico_pericial__nome": item["nome"],
                     "total": item["total"],
+                    "total_exames": item["total_exames"],
                 }
                 for item in por_servico_qs
             ]
@@ -1221,7 +1251,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
             # Cria string ISO (ex: "2025-11-21T14:30:00")
             dt_iso = datetime.combine(d_cadastro, h_cadastro).isoformat()
-            print (str(dt_iso))
+            # print (str(dt_iso)) # Comentado para limpar logs
             titulo = f"{item['numero_ocorrencia']}"
             if item.get("classificacao__nome"):
                 titulo += f" - {item['classificacao__nome']}"

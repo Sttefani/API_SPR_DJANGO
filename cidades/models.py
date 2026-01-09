@@ -15,7 +15,35 @@ class Cidade(AuditModel):
     class Meta:
         verbose_name = "Cidade"
         verbose_name_plural = "Cidades"
-        ordering = ["nome"]  # Ordena as cidades por nome em ordem alfabética
+        ordering = ["nome"]
 
 
-# Create your models here.
+class Bairro(AuditModel):
+    """
+    Modelo de Bairro vinculado a uma Cidade.
+    Garante padronização dos nomes de bairros para relatórios estatísticos.
+    """
+
+    nome = models.CharField(max_length=100, verbose_name="Nome do Bairro")
+    cidade = models.ForeignKey(
+        Cidade, on_delete=models.PROTECT, related_name="bairros", verbose_name="Cidade"
+    )
+
+    def __str__(self):
+        return f"{self.nome} - {self.cidade.nome}"
+
+    def save(self, *args, **kwargs):
+        # Normaliza o nome: MAIÚSCULO e sem espaços extras
+        self.nome = " ".join(self.nome.upper().split())
+        super(Bairro, self).save(*args, **kwargs)
+
+    class Meta:
+        verbose_name = "Bairro"
+        verbose_name_plural = "Bairros"
+        ordering = ["cidade__nome", "nome"]
+        # Garante que não existe bairro duplicado na mesma cidade
+        constraints = [
+            models.UniqueConstraint(
+                fields=["nome", "cidade"], name="unique_bairro_por_cidade"
+            )
+        ]

@@ -24,14 +24,6 @@ from exames.models import Exame
 class SequencialOcorrencia(models.Model):
     """
     Controla o sequencial de numeração das ocorrências por ano.
-    Formato: AAMMNNNN/SIGLA (ex: 260100001/NIC, 260200002/NIC...)
-
-    - AA = Ano (2 dígitos)
-    - MM = Mês do cadastro (01-12)
-    - NNNNN = Sequencial contínuo no ano (zera só em janeiro)
-
-    O sequencial reinicia apenas a cada ano.
-    Suporta até 99.999 ocorrências por ano.
     """
 
     ano = models.PositiveSmallIntegerField(unique=True, verbose_name="Ano (2 dígitos)")
@@ -48,7 +40,25 @@ class SequencialOcorrencia(models.Model):
 
 
 # ============================================================================
-# MODEL PRINCIPAL: Ocorrência (com nova lógica de numeração)
+# MODEL NOVO: Tabela Intermediária de Exames (Aceita Quantidade)
+# ============================================================================
+class OcorrenciaExame(models.Model):
+    ocorrencia = models.ForeignKey("Ocorrencia", on_delete=models.CASCADE)
+    exame = models.ForeignKey(Exame, on_delete=models.PROTECT)
+    quantidade = models.PositiveIntegerField(default=1, verbose_name="Quantidade")
+
+    class Meta:
+        db_table = "ocorrencias_ocorrencia_exames_qtd"
+        unique_together = [("ocorrencia", "exame")]
+        verbose_name = "Exame da Ocorrência"
+        verbose_name_plural = "Exames da Ocorrência"
+
+    def __str__(self):
+        return f"{self.exame.nome} (Qtd: {self.quantidade})"
+
+
+# ============================================================================
+# MODEL PRINCIPAL: Ocorrência
 # ============================================================================
 class Ocorrencia(AuditModel):
     class Status(models.TextChoices):
@@ -139,9 +149,17 @@ class Ocorrencia(AuditModel):
     data_finalizacao = models.DateTimeField(
         null=True, blank=True, verbose_name="Data de Finalização"
     )
+
+    # =========================================================================
+    # CAMPO DE EXAMES RECRIADO (AGORA COM THROUGH E QUANTIDADE)
+    # =========================================================================
     exames_solicitados = models.ManyToManyField(
-        Exame, blank=True, verbose_name="Exames Solicitados"
+        Exame,
+        through="OcorrenciaExame",
+        blank=True,
+        verbose_name="Exames Solicitados",
     )
+
     historico = models.TextField(
         blank=True, null=True, verbose_name="Histórico/Observações"
     )
@@ -195,42 +213,30 @@ class Ocorrencia(AuditModel):
         """Finaliza a ocorrência com assinatura digital."""
         from django.core.exceptions import ValidationError
 
-        # Validação: Já finalizada
         if self.esta_finalizada:
             raise ValidationError(
                 f"Esta ocorrência já foi finalizada por {self.finalizada_por.nome_completo} "
                 f"em {self.data_finalizacao.strftime('%d/%m/%Y às %H:%M')}."
             )
-
-        # Validação: Perito obrigatório
         if not self.perito_atribuido:
             raise ValidationError(
                 "Não é possível finalizar uma ocorrência sem perito atribuído. "
                 "Atribua um perito responsável primeiro."
             )
-
-        # Validação: Status correto
         if self.status != self.Status.EM_ANALISE:
             raise ValidationError(
                 f"Apenas ocorrências com status 'Em Análise' podem ser finalizadas. "
                 f"Status atual: {self.get_status_display()}."
             )
-
-        # Validação: User válido
         if not user or not user.is_authenticated:
             raise ValidationError("Usuário inválido para assinatura digital.")
-
-        # Validação: Perfil autorizado
         if not (user.perfil in ["ADMINISTRATIVO", "SUPER_ADMIN"] or user.is_superuser):
             raise ValidationError(
                 f"Usuário {user.nome_completo} não tem permissão para finalizar ocorrências."
             )
-
-        # Validação: IP obrigatório
         if not ip_address:
             ip_address = "127.0.0.1"
 
-        # Realiza a finalização
         self.status = self.Status.FINALIZADA
         self.data_finalizacao = timezone.now()
         self.finalizada_por = user
@@ -242,37 +248,27 @@ class Ocorrencia(AuditModel):
         """Reabre uma ocorrência finalizada."""
         from django.core.exceptions import ValidationError
 
-        # Validação: Deve estar finalizada
         if not self.esta_finalizada:
             raise ValidationError(
                 "Esta ocorrência não está finalizada. Apenas ocorrências finalizadas podem ser reabertas."
             )
-
-        # Validação: Motivo obrigatório
         if not motivo or not motivo.strip():
             raise ValidationError(
                 "O motivo da reabertura é obrigatório. Por favor, forneça uma justificativa detalhada."
             )
-
         if len(motivo.strip()) < 10:
             raise ValidationError(
                 "O motivo da reabertura é muito curto. Por favor, forneça uma justificativa mais detalhada (mínimo 10 caracteres)."
             )
-
-        # Validação: User válido e Super Admin
         if not user or not user.is_authenticated:
             raise ValidationError("Usuário inválido para reabertura.")
-
         if not user.is_superuser:
             raise ValidationError(
                 f"Usuário {user.nome_completo} não tem permissão para reabrir ocorrências. Apenas Super Administradores podem reabrir ocorrências finalizadas."
             )
-
-        # Validação: IP obrigatório
         if not ip_address:
             ip_address = "127.0.0.1"
 
-        # Realiza a reabertura
         self.status = self.Status.EM_ANALISE
         self.data_finalizacao = None
         self.reaberta_por = user
@@ -283,25 +279,15 @@ class Ocorrencia(AuditModel):
 
     # =========================================================================
     # MÉTODO SAVE COM NOVA LÓGICA DE NUMERAÇÃO
-    # Formato: AAMMNNNN/SIGLA (ex: 260100001/NIC, 260200002/NIC...)
-    # - AA = Ano (2 dígitos)
-    # - MM = Mês do cadastro (01-12)
-    # - NNNNN = Sequencial contínuo no ano (zera só em janeiro)
-    # Suporta até 99.999 ocorrências por ano
     # =========================================================================
     def save(self, *args, **kwargs):
-        # ===== GERAÇÃO DO NÚMERO DA OCORRÊNCIA (SEQUENCIAL ANUAL COM MÊS) =====
         if not self.pk:
             with transaction.atomic():
                 now = datetime.datetime.now()
                 servico_sigla = self.servico_pericial.sigla
+                ano_2digitos = now.year % 100
+                mes = now.month
 
-                # Pega o ano com 2 dígitos e o mês
-                ano_2digitos = now.year % 100  # 2026 -> 26
-                mes = now.month  # 1-12
-
-                # Busca ou cria o registro de sequencial para este ANO (com lock para concorrência)
-                # O sequencial é por ANO, não por mês!
                 (
                     sequencial_obj,
                     created,
@@ -309,58 +295,39 @@ class Ocorrencia(AuditModel):
                     ano=ano_2digitos, defaults={"ultimo_sequencial": 0}
                 )
 
-                # Incrementa o sequencial
                 sequencial_obj.ultimo_sequencial += 1
                 sequencial_obj.save()
 
-                # Monta o número: AAMMNNNN (ex: 260100001)
-                # O mês aparece no número, mas o sequencial é contínuo no ano
                 numero_base = (
                     f"{ano_2digitos:02d}{mes:02d}{sequencial_obj.ultimo_sequencial:05d}"
                 )
 
-                # Formato final: 260100001/SIGLA
                 self.numero_ocorrencia = f"{numero_base}/{servico_sigla}"
 
-                # Tenta salvar até 10 vezes (caso haja duplicação rara por concorrência extrema)
                 tentativas = 0
                 max_tentativas = 10
 
                 while tentativas < max_tentativas:
                     try:
-                        # Tenta salvar com o número gerado
                         self._executar_save(args, kwargs)
-                        return  # ✅ Sucesso! Sai do método
-
+                        return
                     except IntegrityError as e:
-                        # Se for erro de número duplicado, incrementa e tenta novamente
                         if "numero_ocorrencia" in str(e) or "unique" in str(e).lower():
                             tentativas += 1
-                            # Recarrega e incrementa o sequencial
                             sequencial_obj.refresh_from_db()
                             sequencial_obj.ultimo_sequencial += 1
                             sequencial_obj.save()
                             numero_base = f"{ano_2digitos:02d}{mes:02d}{sequencial_obj.ultimo_sequencial:05d}"
                             self.numero_ocorrencia = f"{numero_base}/{servico_sigla}"
                         else:
-                            # Se for outro tipo de IntegrityError, propaga
                             raise
-
-                # Se após 10 tentativas não conseguiu, levanta erro
                 raise IntegrityError(
                     f"Não foi possível gerar número único após {max_tentativas} tentativas"
                 )
-
-        # ===== PARA ATUALIZAÇÕES (quando já tem PK) =====
         else:
             self._executar_save(args, kwargs)
 
     def _executar_save(self, args, kwargs):
-        """
-        Método auxiliar que executa toda a lógica de save
-        (separado para evitar duplicação de código)
-        """
-        # ===== ATUALIZAÇÃO DO HISTÓRICO =====
         if self.pk:
             try:
                 versao_antiga = Ocorrencia.objects.get(pk=self.pk)
@@ -369,20 +336,17 @@ class Ocorrencia(AuditModel):
             except Ocorrencia.DoesNotExist:
                 pass
 
-        # ===== LÓGICA DE STATUS =====
         if self.status != self.Status.FINALIZADA:
             if self.perito_atribuido:
                 self.status = self.Status.EM_ANALISE
             else:
                 self.status = self.Status.AGUARDANDO_PERITO
 
-        # ===== NORMALIZAÇÃO DE CAMPOS =====
         if self.numero_documento_origem:
             self.numero_documento_origem = self.numero_documento_origem.upper()
         if self.processo_sei_numero:
             self.processo_sei_numero = self.processo_sei_numero.upper()
 
-        # ===== SALVA NO BANCO =====
         super(Ocorrencia, self).save(*args, **kwargs)
 
     def __str__(self):
@@ -391,7 +355,7 @@ class Ocorrencia(AuditModel):
     class Meta:
         verbose_name = "Ocorrência"
         verbose_name_plural = "Ocorrências"
-        ordering = ["created_at"]
+        ordering = ["-created_at"]
 
 
 # ============================================================================
@@ -400,7 +364,6 @@ class Ocorrencia(AuditModel):
 class HistoricoVinculacao(models.Model):
     """
     Modelo para registrar (auditar) a troca de um procedimento vinculado a uma ocorrência.
-    Esta tabela serve como um log, garantindo a rastreabilidade das alterações.
     """
 
     ocorrencia = models.ForeignKey(

@@ -18,7 +18,7 @@ from usuarios.views import (
     ChangePasswordView,
 )
 from servicos_periciais.views import ServicoPericialViewSet
-from cidades.views import CidadeViewSet
+from cidades.views import CidadeViewSet, BairroViewSet  # ← ADICIONADO BairroViewSet
 from cargos.views import CargoViewSet
 from autoridades.views import AutoridadeViewSet
 from unidades_demandantes.views import UnidadeDemandanteViewSet
@@ -37,6 +37,7 @@ router = routers.DefaultRouter()
 router.register(r"usuarios", UserManagementViewSet)
 router.register(r"servicos-periciais", ServicoPericialViewSet)
 router.register(r"cidades", CidadeViewSet)
+router.register(r"bairros", BairroViewSet)  # ← ADICIONADO
 router.register(r"cargos", CargoViewSet)
 router.register(r"autoridades", AutoridadeViewSet)
 router.register(r"unidades-demandantes", UnidadeDemandanteViewSet)

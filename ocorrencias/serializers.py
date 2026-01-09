@@ -3,11 +3,12 @@
 from rest_framework import serializers
 from django.utils import timezone
 import datetime
-
+from cidades.models import Bairro
 from ocorrencias.endereco_models import EnderecoOcorrencia
 from usuarios.models import User
 from .models import (
     Ocorrencia,
+    OcorrenciaExame,  # <--- ALTERAÇÃO 1: Importei o novo model
     ServicoPericial,
     UnidadeDemandante,
     Autoridade,
@@ -30,15 +31,32 @@ from usuarios.serializers import UserNestedSerializer
 
 
 # ========================================
-# SERIALIZER DE ENDEREÇO
+# SERIALIZER DE ENDEREÇO (AJUSTADO PARA FRONTEND)
 # ========================================
 
 
 class EnderecoOcorrenciaSerializer(serializers.ModelSerializer):
     """Serializer para endereço de ocorrências externas"""
 
+    from cidades.models import Bairro  # Import no topo da classe
+
     endereco_completo = serializers.ReadOnlyField()
     tem_coordenadas = serializers.ReadOnlyField()
+
+    # Leitura 1: Campo 'bairro' (o que o frontend exibe na tela de detalhes)
+    bairro = serializers.SerializerMethodField()
+
+    # Leitura 2: Campo 'bairro_nome' (mantido caso usem em outro lugar)
+    bairro_nome = serializers.SerializerMethodField()
+
+    # Escrita: Recebe o ID do bairro e salva no campo 'bairro_novo'
+    bairro_id = serializers.PrimaryKeyRelatedField(
+        queryset=Bairro.objects.all(),
+        source="bairro_novo",  # Aponta para o campo FK correto
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
 
     class Meta:
         model = EnderecoOcorrencia
@@ -46,25 +64,58 @@ class EnderecoOcorrenciaSerializer(serializers.ModelSerializer):
             "id",
             "ocorrencia",
             "tipo",
+            "modo_entrada",
             "logradouro",
             "numero",
             "complemento",
-            "bairro",
+            "bairro_id",  # Envia o ID (escrita)
+            "bairro",  # <--- VOLTOU: O frontend lê isso aqui para exibir
+            "bairro_nome",  # Extra
+            "bairro_legado",  # Campo texto antigo
             "cep",
             "latitude",
             "longitude",
+            "coordenadas_manuais",
             "ponto_referencia",
             "endereco_completo",
             "tem_coordenadas",
             "created_at",
             "updated_at",
-            "endereco_completo",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at", "bairro_legado"]
+
+    def get_bairro(self, obj):
+        """Retorna o nome do bairro para o frontend exibir"""
+        # Prioriza o bairro novo (FK)
+        if obj.bairro_novo:
+            return obj.bairro_novo.nome
+        # Se não tiver, retorna o texto antigo (legado)
+        return obj.bairro_legado
+
+    def get_bairro_nome(self, obj):
+        return self.get_bairro(obj)
+
+
+# ========================================
+# ALTERAÇÃO 2: NOVO SERIALIZER PARA EXAMES COM QUANTIDADE
+# ========================================
+class OcorrenciaExameSerializer(serializers.ModelSerializer):
+    """
+    Mostra os detalhes do exame junto com a quantidade salva na ocorrência.
+    """
+
+    # Campos que vêm do objeto Exame (read_only porque não mudamos o nome do exame aqui)
+    id = serializers.ReadOnlyField(source="exame.id")
+    codigo = serializers.ReadOnlyField(source="exame.codigo")
+    nome = serializers.ReadOnlyField(source="exame.nome")
+    servico = serializers.ReadOnlyField(source="exame.servico_pericial.nome")
+
+    class Meta:
+        model = OcorrenciaExame
+        fields = ["id", "codigo", "nome", "servico", "quantidade"]
 
 
 class OcorrenciaListSerializer(serializers.ModelSerializer):
-    # ... (código sem alteração)
     status_prazo = serializers.SerializerMethodField()
     dias_prazo = serializers.SerializerMethodField()
     servico_pericial = ServicoPericialSerializer(read_only=True)
@@ -89,7 +140,7 @@ class OcorrenciaListSerializer(serializers.ModelSerializer):
             "perito_atribuido",
             "created_by",
             "esta_finalizada",
-            "classificacao",  # <--- 🔥 OBRIGATÓRIO ADICIONAR AQUI TAMBÉM
+            "classificacao",
         ]
 
     def get_status_prazo(self, obj):
@@ -112,7 +163,6 @@ class OcorrenciaListSerializer(serializers.ModelSerializer):
 
 
 class OcorrenciaDetailSerializer(serializers.ModelSerializer):
-    # ... (código sem alteração)
     servico_pericial = ServicoPericialSerializer(read_only=True)
     unidade_demandante = UnidadeDemandanteSerializer(read_only=True)
     autoridade = AutoridadeSerializer(read_only=True)
@@ -124,7 +174,13 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
     perito_atribuido = UserNestedSerializer(read_only=True)
     created_by = UserNestedSerializer(read_only=True)
     updated_by = UserNestedSerializer(read_only=True)
-    exames_solicitados = ExameNestedSerializer(many=True, read_only=True)
+
+    # ALTERAÇÃO 3: Usa o novo serializer para mostrar exames com quantidade
+    # source='ocorrenciaexame_set' pega os itens da tabela intermediária
+    exames_solicitados = OcorrenciaExameSerializer(
+        source="ocorrenciaexame_set", many=True, read_only=True
+    )
+
     finalizada_por = UserNestedSerializer(read_only=True)
     reaberta_por = UserNestedSerializer(read_only=True)
 
@@ -195,7 +251,6 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
 
 
 class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
-    # ... (código sem alteração)
     perito_atribuido_id = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.filter(perfil="PERITO"),
         source="perito_atribuido",
@@ -245,7 +300,10 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         write_only=True,
         help_text="Lista de IDs dos exames (substitui todos os existentes)",
     )
-    exames_solicitados = ExameNestedSerializer(many=True, read_only=True)
+    # ALTERAÇÃO 4: Atualiza o serializer de leitura no update também
+    exames_solicitados = OcorrenciaExameSerializer(
+        source="ocorrenciaexame_set", many=True, read_only=True
+    )
 
     class Meta:
         model = Ocorrencia
@@ -282,7 +340,7 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         instance = self.instance
         request = self.context.get("request")
         user = request.user
-        # ===== VALIDAÇÃO GERAL: Se tem perito, só ele ou super admin editam =====
+
         if instance.perito_atribuido:
             if not user.is_superuser and user.id != instance.perito_atribuido.id:
                 perito_nome = instance.perito_atribuido.nome_completo
@@ -296,13 +354,11 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
                     }
                 )
 
-        # --- INÍCIO DA CORREÇÃO ---
         classificacao = data.get("classificacao")
         if classificacao and classificacao.subgrupos.exists():
             raise serializers.ValidationError(
                 f'A classificação "{classificacao.nome}" é um Grupo Principal. Por favor, selecione um subgrupo específico.'
             )
-        # --- FIM DA CORREÇÃO ---
 
         if instance.esta_finalizada:
             raise serializers.ValidationError(
@@ -366,13 +422,22 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         for field, value in validated_data.items():
             setattr(instance, field, value)
         instance.save()
+
+        # ALTERAÇÃO 5: Lógica de compatibilidade para salvar exames sem quantidade via update padrão
         if exames_ids is not None:
-            instance.exames_solicitados.set(exames_ids)
+            # Limpa exames antigos
+            OcorrenciaExame.objects.filter(ocorrencia=instance).delete()
+            # Recria com quantidade 1
+            novos = [
+                OcorrenciaExame(ocorrencia=instance, exame_id=eid, quantidade=1)
+                for eid in exames_ids
+            ]
+            OcorrenciaExame.objects.bulk_create(novos)
+
         return instance
 
 
 class FinalizarComAssinaturaSerializer(serializers.Serializer):
-    # ... (código sem alteração)
     password = serializers.CharField(
         write_only=True,
         style={"input_type": "password"},
@@ -389,7 +454,6 @@ class FinalizarComAssinaturaSerializer(serializers.Serializer):
 
 
 class ReabrirOcorrenciaSerializer(serializers.Serializer):
-    # ... (código sem alteração)
     password = serializers.CharField(
         write_only=True,
         style={"input_type": "password"},
@@ -413,7 +477,6 @@ class ReabrirOcorrenciaSerializer(serializers.Serializer):
 
 
 class OcorrenciaLixeiraSerializer(serializers.ModelSerializer):
-    # ... (código sem alteração)
     servico_pericial = ServicoPericialSerializer(read_only=True)
     unidade_demandante = UnidadeDemandanteSerializer(read_only=True)
     deleted_by = UserNestedSerializer(read_only=True)
@@ -432,7 +495,6 @@ class OcorrenciaLixeiraSerializer(serializers.ModelSerializer):
 
 
 class OcorrenciaDisplaySerializer(serializers.ModelSerializer):
-    # Fields for displaying Ocorrencia details
     servico_pericial = serializers.CharField(
         source="servico_pericial.nome", read_only=True
     )
@@ -485,7 +547,6 @@ class OcorrenciaDisplaySerializer(serializers.ModelSerializer):
 
 
 class OcorrenciaCreateSerializer(serializers.ModelSerializer):
-    # ... (outros campos sem alteração)
     servico_pericial_id = serializers.PrimaryKeyRelatedField(
         queryset=ServicoPericial.objects.all(),
         source="servico_pericial",
@@ -503,7 +564,7 @@ class OcorrenciaCreateSerializer(serializers.ModelSerializer):
         queryset=Cidade.objects.all(), source="cidade", label="Cidade"
     )
     classificacao_id = serializers.PrimaryKeyRelatedField(
-        queryset=ClassificacaoOcorrencia.objects.all(),  # Mantém all() para a validação inicial
+        queryset=ClassificacaoOcorrencia.objects.all(),
         source="classificacao",
         label="Classificação",
     )
@@ -572,13 +633,11 @@ class OcorrenciaCreateSerializer(serializers.ModelSerializer):
     def validate(self, data):
         user = self.context["request"].user
 
-        # --- INÍCIO DA CORREÇÃO ---
         classificacao = data.get("classificacao")
         if classificacao and classificacao.subgrupos.exists():
             raise serializers.ValidationError(
                 f'A classificação "{classificacao.nome}" é um Grupo Principal. Por favor, selecione um subgrupo específico.'
             )
-        # --- FIM DA CORREÇÃO ---
 
         if (
             not user.servicos_periciais.filter(
