@@ -35,24 +35,36 @@ from usuarios.serializers import UserNestedSerializer
 # ========================================
 
 
+# ========================================
+# SERIALIZER DE ENDEREÇO (CORRIGIDO)
+# ========================================
+# Cole este código no arquivo ocorrencias/serializers.py
+# Substituindo o EnderecoOcorrenciaSerializer existente
+
+
 class EnderecoOcorrenciaSerializer(serializers.ModelSerializer):
     """Serializer para endereço de ocorrências externas"""
 
-    from cidades.models import Bairro  # Import no topo da classe
+    from cidades.models import Bairro
 
     endereco_completo = serializers.ReadOnlyField()
     tem_coordenadas = serializers.ReadOnlyField()
 
-    # Leitura 1: Campo 'bairro' (o que o frontend exibe na tela de detalhes)
+    # ✅ Leitura: Campo 'bairro' retorna o NOME do bairro (para exibição)
     bairro = serializers.SerializerMethodField()
 
-    # Leitura 2: Campo 'bairro_nome' (mantido caso usem em outro lugar)
+    # ✅ Leitura: Campo 'bairro_nome' (mantido para compatibilidade)
     bairro_nome = serializers.SerializerMethodField()
 
-    # Escrita: Recebe o ID do bairro e salva no campo 'bairro_novo'
+    # ✅ NOVO: Retorna o ID do bairro para o frontend carregar no dropdown
+    bairro_novo_id = serializers.IntegerField(
+        source="bairro_novo.id", read_only=True, allow_null=True
+    )
+
+    # ✅ Escrita: Recebe o ID do bairro e salva no campo 'bairro_novo'
     bairro_id = serializers.PrimaryKeyRelatedField(
         queryset=Bairro.objects.all(),
-        source="bairro_novo",  # Aponta para o campo FK correto
+        source="bairro_novo",
         required=False,
         allow_null=True,
         write_only=True,
@@ -68,8 +80,9 @@ class EnderecoOcorrenciaSerializer(serializers.ModelSerializer):
             "logradouro",
             "numero",
             "complemento",
-            "bairro_id",  # Envia o ID (escrita)
-            "bairro",  # <--- VOLTOU: O frontend lê isso aqui para exibir
+            "bairro_id",  # Escrita (envia ID)
+            "bairro_novo_id",  # ✅ NOVO: Leitura (retorna ID do bairro)
+            "bairro",  # Leitura (retorna nome para exibição)
             "bairro_nome",  # Extra
             "bairro_legado",  # Campo texto antigo
             "cep",
@@ -86,10 +99,8 @@ class EnderecoOcorrenciaSerializer(serializers.ModelSerializer):
 
     def get_bairro(self, obj):
         """Retorna o nome do bairro para o frontend exibir"""
-        # Prioriza o bairro novo (FK)
         if obj.bairro_novo:
             return obj.bairro_novo.nome
-        # Se não tiver, retorna o texto antigo (legado)
         return obj.bairro_legado
 
     def get_bairro_nome(self, obj):

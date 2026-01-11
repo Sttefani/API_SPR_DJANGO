@@ -111,6 +111,7 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+chroma_db/chorma.sqlite3
 
 # Sublime Text #
 *.tmlanguage.cache

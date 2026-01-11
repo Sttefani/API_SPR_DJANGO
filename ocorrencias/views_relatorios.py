@@ -1,17 +1,18 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.db.models import Q, Count, F, Case, When
+from django.db.models import Q, Count, F, Case, When, Sum
 from django.db.models.functions import Coalesce
 from datetime import datetime
 
-from .models import Ocorrencia
+from .models import Ocorrencia, OcorrenciaExame
 from .permissions import PodeVerRelatoriosGerenciais
 from .pdf_generator import gerar_pdf_relatorios_gerenciais
 from servicos_periciais.models import ServicoPericial
 from cidades.models import Cidade
 from usuarios.models import User
 from classificacoes.models import ClassificacaoOcorrencia
+from exames.models import Exame
 
 
 class RelatoriosGerenciaisViewSet(viewsets.ViewSet):
@@ -148,9 +149,21 @@ class RelatoriosGerenciaisViewSet(viewsets.ViewSet):
             .order_by("-total_ocorrencias")
         )
 
+        # =========================================================================
+        # ✅ CORREÇÃO: Query de total_exames corrigida
+        # O caminho correto é: ServicoPericial -> ocorrencias -> ocorrenciaexame_set
+        # =========================================================================
         servicos_queryset = ServicoPericial.objects.filter(deleted_at__isnull=True)
         por_servico = (
             servicos_queryset.annotate(
+                # ✅ CORRIGIDO: Caminho correto para soma de exames
+                total_exames=Coalesce(
+                    Sum(
+                        "ocorrencias__ocorrenciaexame__quantidade",
+                        filter=Q(ocorrencias__in=queryset),
+                    ),
+                    0,
+                ),
                 total=Coalesce(
                     Count("ocorrencias", filter=Q(ocorrencias__in=queryset)), 0
                 ),
@@ -173,7 +186,9 @@ class RelatoriosGerenciaisViewSet(viewsets.ViewSet):
                     0,
                 ),
             )
-            .values("sigla", "nome", "total", "finalizadas", "em_analise")
+            .values(
+                "sigla", "nome", "total", "total_exames", "finalizadas", "em_analise"
+            )
             .order_by("-total")
         )
 
@@ -182,10 +197,35 @@ class RelatoriosGerenciaisViewSet(viewsets.ViewSet):
                 "servico_pericial__sigla": item["sigla"],
                 "servico_pericial__nome": item["nome"],
                 "total": item["total"],
+                "total_exames": item["total_exames"],
                 "finalizadas": item["finalizadas"],
                 "em_analise": item["em_analise"],
             }
             for item in por_servico
+        ]
+
+        # =========================================================================
+        # ✅ NOVO: Query para exames solicitados agrupados
+        # =========================================================================
+        por_exame = (
+            OcorrenciaExame.objects.filter(ocorrencia__in=queryset)
+            .values(
+                "exame__codigo",
+                "exame__nome",
+                "exame__servico_pericial__sigla",
+            )
+            .annotate(quantidade_total=Sum("quantidade"))
+            .order_by("exame__servico_pericial__sigla", "exame__codigo")
+        )
+
+        por_exame_formatado = [
+            {
+                "codigo": item["exame__codigo"],
+                "nome": item["exame__nome"],
+                "servico_sigla": item["exame__servico_pericial__sigla"],
+                "quantidade": item["quantidade_total"],
+            }
+            for item in por_exame
         ]
 
         return Response(
@@ -194,6 +234,7 @@ class RelatoriosGerenciaisViewSet(viewsets.ViewSet):
                 "por_classificacao_especifica": list(por_classificacao_especifica),
                 "producao_por_perito": list(por_perito),
                 "por_servico": por_servico_formatado,
+                "por_exame": por_exame_formatado,
             }
         )
 
@@ -268,7 +309,7 @@ class RelatoriosGerenciaisViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Gera os dados
+        # Gera os dados (Mesma lógica do list)
         por_grupo_principal = (
             queryset.annotate(
                 grupo_nome=Case(
@@ -335,9 +376,20 @@ class RelatoriosGerenciaisViewSet(viewsets.ViewSet):
             .order_by("-total_ocorrencias")
         )
 
+        # =========================================================================
+        # ✅ CORREÇÃO: Query de total_exames corrigida (para o PDF também)
+        # =========================================================================
         servicos_queryset = ServicoPericial.objects.filter(deleted_at__isnull=True)
         por_servico = (
             servicos_queryset.annotate(
+                # ✅ CORRIGIDO: Caminho correto para soma de exames
+                total_exames=Coalesce(
+                    Sum(
+                        "ocorrencias__ocorrenciaexame__quantidade",
+                        filter=Q(ocorrencias__in=queryset),
+                    ),
+                    0,
+                ),
                 total=Coalesce(
                     Count("ocorrencias", filter=Q(ocorrencias__in=queryset)), 0
                 ),
@@ -360,7 +412,9 @@ class RelatoriosGerenciaisViewSet(viewsets.ViewSet):
                     0,
                 ),
             )
-            .values("sigla", "nome", "total", "finalizadas", "em_analise")
+            .values(
+                "sigla", "nome", "total", "total_exames", "finalizadas", "em_analise"
+            )
             .order_by("-total")
         )
 
@@ -369,10 +423,35 @@ class RelatoriosGerenciaisViewSet(viewsets.ViewSet):
                 "servico_pericial__sigla": item["sigla"],
                 "servico_pericial__nome": item["nome"],
                 "total": item["total"],
+                "total_exames": item["total_exames"],
                 "finalizadas": item["finalizadas"],
                 "em_analise": item["em_analise"],
             }
             for item in por_servico
+        ]
+
+        # =========================================================================
+        # ✅ NOVO: Query para exames solicitados agrupados (para o PDF)
+        # =========================================================================
+        por_exame = (
+            OcorrenciaExame.objects.filter(ocorrencia__in=queryset)
+            .values(
+                "exame__codigo",
+                "exame__nome",
+                "exame__servico_pericial__sigla",
+            )
+            .annotate(quantidade_total=Sum("quantidade"))
+            .order_by("exame__servico_pericial__sigla", "exame__codigo")
+        )
+
+        por_exame_formatado = [
+            {
+                "codigo": item["exame__codigo"],
+                "nome": item["exame__nome"],
+                "servico_sigla": item["exame__servico_pericial__sigla"],
+                "quantidade": item["quantidade_total"],
+            }
+            for item in por_exame
         ]
 
         # Prepara os dados
@@ -381,6 +460,7 @@ class RelatoriosGerenciaisViewSet(viewsets.ViewSet):
             "por_classificacao_especifica": list(por_classificacao_especifica),
             "producao_por_perito": list(por_perito),
             "por_servico": por_servico_formatado,
+            "por_exame": por_exame_formatado,
         }
 
         # Chama a função que gera o PDF

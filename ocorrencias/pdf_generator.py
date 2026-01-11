@@ -11,7 +11,7 @@ from reportlab.platypus import (
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
 from reportlab.lib.units import cm
 
@@ -84,6 +84,16 @@ def gerar_pdf_ocorrencia(ocorrencia, request):
             name="NormalCompacto", parent=styles["Normal"], leading=14, spaceAfter=2
         )
     )
+    # Estilo para lista de exames
+    styles.add(
+        ParagraphStyle(
+            name="ExameItem",
+            parent=styles["Normal"],
+            leading=14,
+            spaceAfter=2,
+            leftIndent=15,
+        )
+    )
 
     story = []
 
@@ -135,38 +145,27 @@ def gerar_pdf_ocorrencia(ocorrencia, request):
             "Classificação",
             f"{ocorrencia.classificacao.codigo} - {ocorrencia.classificacao.nome}",
         )
-    # <<< INÍCIO DO NOVO BLOCO PARA O ENDEREÇO >>>
 
-    # Verifica se a ocorrência tem um endereço associado.
-    # O 'hasattr' é uma forma segura de verificar se o atributo existe antes de acessá-lo.
+    # Bloco Endereço
     if hasattr(ocorrencia, "endereco") and ocorrencia.endereco:
         story.append(Paragraph("2.1. ENDEREÇO DO FATO", styles["Subtitulo"]))
-
-        # Adiciona o tipo de ocorrência (Externa/Interna)
         add_linha("Tipo de Local", ocorrencia.endereco.get_tipo_display())
 
-        # Adiciona os detalhes do endereço apenas se for do tipo EXTERNA
         if ocorrencia.endereco.tipo == "EXTERNA":
-
-            # Usa a propriedade 'endereco_completo' do modelo
             if (
                 ocorrencia.endereco.endereco_completo
                 and ocorrencia.endereco.endereco_completo != "Endereço não informado"
             ):
                 add_linha("Local", ocorrencia.endereco.endereco_completo)
 
-            # Adiciona o ponto de referência se existir
             if ocorrencia.endereco.ponto_referencia:
                 add_linha("Ponto de Referência", ocorrencia.endereco.ponto_referencia)
 
-            # Adiciona as coordenadas GPS se existirem
             if ocorrencia.endereco.latitude and ocorrencia.endereco.longitude:
                 add_linha(
                     "Coordenadas GPS",
                     f"{ocorrencia.endereco.latitude}, {ocorrencia.endereco.longitude}",
                 )
-
-    # <<< FIM DO NOVO BLOCO PARA O ENDEREÇO >>>
 
     story.append(Paragraph("3. HISTÓRICO / OBSERVAÇÕES", styles["Subtitulo"]))
     add_paragrafo(ocorrencia.historico or "Não informado.")
@@ -174,7 +173,6 @@ def gerar_pdf_ocorrencia(ocorrencia, request):
     # --- SEÇÃO DE PROCEDIMENTO E DOCUMENTOS ---
     story.append(Paragraph("3.1. PROCEDIMENTO E DOCUMENTOS", styles["Subtitulo"]))
 
-    # Procedimento Cadastrado
     if ocorrencia.procedimento_cadastrado:
         proc = ocorrencia.procedimento_cadastrado
         add_linha("Tipo de Procedimento", proc.tipo_procedimento.sigla)
@@ -182,7 +180,6 @@ def gerar_pdf_ocorrencia(ocorrencia, request):
     else:
         add_paragrafo("Nenhum procedimento vinculado.")
 
-    # Documento de Origem
     if ocorrencia.tipo_documento_origem:
         add_linha("Documento de Origem", ocorrencia.tipo_documento_origem.nome)
 
@@ -194,9 +191,27 @@ def gerar_pdf_ocorrencia(ocorrencia, request):
             "Data do Documento", ocorrencia.data_documento_origem.strftime("%d/%m/%Y")
         )
 
-    # Processo SEI
     if ocorrencia.processo_sei_numero:
         add_linha("Processo SEI", ocorrencia.processo_sei_numero)
+
+    # =========================================================================
+    # ✅ NOVA SEÇÃO: EXAMES SOLICITADOS (COM QUANTIDADE)
+    # =========================================================================
+    story.append(Paragraph("3.2. EXAMES SOLICITADOS", styles["Subtitulo"]))
+
+    # Acessa a tabela intermediária (OcorrenciaExame) através do reverse relationship
+    exames_vinculados = ocorrencia.ocorrenciaexame_set.select_related("exame").order_by(
+        "exame__nome"
+    )
+
+    if exames_vinculados.exists():
+        for item in exames_vinculados:
+            # Formata: "• (10 un.) Código - Nome do Exame"
+            texto_exame = f"<b>({item.quantidade} un.)</b> {item.exame.codigo} - {item.exame.nome}"
+            story.append(Paragraph(f"• {texto_exame}", styles["ExameItem"]))
+    else:
+        add_paragrafo("Nenhum exame solicitado para esta ocorrência.")
+    # =========================================================================
 
     story.append(Spacer(1, 0.3 * cm))
 
@@ -1406,7 +1421,7 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
             TableStyle(
                 [
                     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e3a8a")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                     ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                     ("ALIGN", (2, 0), (2, -1), "CENTER"),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
@@ -1458,7 +1473,7 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
             TableStyle(
                 [
                     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e3a8a")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                     ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                     ("ALIGN", (2, 0), (2, -1), "CENTER"),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
@@ -1503,7 +1518,7 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
             TableStyle(
                 [
                     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e3a8a")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                     ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                     ("ALIGN", (1, 0), (-1, -1), "CENTER"),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
@@ -1527,53 +1542,232 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
         story.append(table)
         story.append(Spacer(1, 0.7 * cm))
 
-    # TABELA 4: PRODUÇÃO POR SERVIÇO
+    # =========================================================================
+    # ✅ TABELA 4: PRODUÇÃO POR SERVIÇO (COM COLUNA DE EXAMES E TOTAL)
+    # =========================================================================
     if dados.get("por_servico") and len(dados["por_servico"]) > 0:
         story.append(Paragraph("Produção por Serviço Pericial", styles["Subtitulo"]))
 
-        table_data = [["Serviço", "Total", "Finalizadas", "Em Análise"]]
+        # Cabeçalho da tabela
+        table_data = [
+            ["Serviço", "Total OCs", "Total Exames", "Finalizadas", "Em Análise"]
+        ]
+
+        # Variáveis para totalização
+        total_ocs = 0
+        total_exames = 0
+        total_finalizadas = 0
+        total_em_analise = 0
+
         for item in dados["por_servico"]:
+            # ✅ CORREÇÃO: Usar apenas a SIGLA para evitar texto longo
             sigla = item.get("servico_pericial__sigla", "-")
-            nome = item.get("servico_pericial__nome", "-")
-            servico_completo = f"{sigla} - {nome}" if sigla != "-" else nome
+
+            # Valores da linha
+            ocs = item.get("total", 0)
+            exames = item.get("total_exames", 0)
+            finalizadas = item.get("finalizadas", 0)
+            em_analise = item.get("em_analise", 0)
+
+            # Acumula totais
+            total_ocs += ocs
+            total_exames += exames
+            total_finalizadas += finalizadas
+            total_em_analise += em_analise
 
             table_data.append(
                 [
-                    servico_completo,
-                    str(item.get("total", 0)),
-                    str(item.get("finalizadas", 0)),
-                    str(item.get("em_analise", 0)),
+                    sigla,
+                    str(ocs),
+                    str(exames),
+                    str(finalizadas),
+                    str(em_analise),
                 ]
             )
 
-        col_widths = [10 * cm, 3 * cm, 3 * cm, 3 * cm]
+        # ✅ NOVO: Linha de TOTAL
+        table_data.append(
+            [
+                "TOTAL",
+                str(total_ocs),
+                str(total_exames),
+                str(total_finalizadas),
+                str(total_em_analise),
+            ]
+        )
+
+        # Larguras ajustadas (sigla ocupa menos espaço)
+        col_widths = [4 * cm, 3 * cm, 3 * cm, 3 * cm, 3 * cm]
         table = Table(table_data, colWidths=col_widths)
+
+        # Índice da última linha (linha de total)
+        ultima_linha = len(table_data) - 1
+
         table.setStyle(
             TableStyle(
                 [
+                    # Cabeçalho
                     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e3a8a")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-                    ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                    ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, 0), 10),
+                    ("FONTSIZE", (0, 0), (-1, 0), 9),
+                    ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+                    ("TOPPADDING", (0, 0), (-1, 0), 8),
+                    # Corpo da tabela
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
                     ("FONTSIZE", (0, 1), (-1, -1), 9),
-                    ("BOTTOMPADDING", (0, 0), (-1, 0), 10),
-                    ("TOPPADDING", (0, 0), (-1, 0), 10),
                     ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
                     ("TOPPADDING", (0, 1), (-1, -1), 6),
+                    # Grade
                     ("GRID", (0, 0), (-1, -1), 1, colors.HexColor("#cbd5e0")),
+                    # Cores alternadas (exceto última linha)
                     (
                         "ROWBACKGROUNDS",
                         (0, 1),
-                        (-1, -1),
+                        (-1, ultima_linha - 1),
                         [colors.white, colors.HexColor("#f7fafc")],
+                    ),
+                    # ✅ NOVO: Estilo da linha de TOTAL
+                    (
+                        "BACKGROUND",
+                        (0, ultima_linha),
+                        (-1, ultima_linha),
+                        colors.HexColor("#1e3a8a"),
+                    ),
+                    ("TEXTCOLOR", (0, ultima_linha), (-1, ultima_linha), colors.white),
+                    (
+                        "FONTNAME",
+                        (0, ultima_linha),
+                        (-1, ultima_linha),
+                        "Helvetica-Bold",
                     ),
                 ]
             )
         )
 
         story.append(table)
+
+    # =========================================================================
+    # ✅ TABELA 5: EXAMES SOLICITADOS (NOVA)
+    # =========================================================================
+    story.append(Spacer(1, 0.7 * cm))
+    story.append(Paragraph("Exames Solicitados", styles["Subtitulo"]))
+
+    if dados.get("por_exame") and len(dados["por_exame"]) > 0:
+        # ✅ Estilo para células com texto longo (quebra de linha)
+        estilo_celula = ParagraphStyle(
+            "CelulaExame",
+            parent=styles["Normal"],
+            fontSize=8,
+            leading=10,
+        )
+
+        # Cabeçalho da tabela
+        table_data = [["Código", "Exame", "Serviço", "Qtd"]]
+
+        # Variável para totalização
+        total_quantidade = 0
+
+        for item in dados["por_exame"]:
+            codigo = item.get("codigo", "-")
+            nome = item.get("nome", "-")
+            servico = item.get("servico_sigla", "-")
+            quantidade = item.get("quantidade", 0)
+
+            # Acumula total
+            total_quantidade += quantidade
+
+            # ✅ Usa Paragraph para permitir quebra de linha no nome do exame
+            table_data.append(
+                [
+                    codigo,
+                    Paragraph(nome, estilo_celula),
+                    servico,
+                    str(quantidade),
+                ]
+            )
+
+        # Linha de TOTAL
+        table_data.append(
+            [
+                "TOTAL",
+                "",
+                "",
+                str(total_quantidade),
+            ]
+        )
+
+        # ✅ Larguras ajustadas (coluna Exame maior para acomodar texto)
+        col_widths = [2.5 * cm, 12.5 * cm, 2 * cm, 2 * cm]
+        table = Table(table_data, colWidths=col_widths)
+
+        # Índice da última linha (linha de total)
+        ultima_linha = len(table_data) - 1
+
+        table.setStyle(
+            TableStyle(
+                [
+                    # Cabeçalho
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e3a8a")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, 0), 9),
+                    ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+                    ("TOPPADDING", (0, 0), (-1, 0), 8),
+                    # Corpo da tabela
+                    ("ALIGN", (0, 0), (0, -1), "LEFT"),  # Código à esquerda
+                    ("ALIGN", (1, 0), (1, -1), "LEFT"),  # Nome à esquerda
+                    (
+                        "ALIGN",
+                        (2, 0),
+                        (-1, -1),
+                        "CENTER",
+                    ),  # Serviço e Qtd centralizados
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "MIDDLE",
+                    ),  # ✅ Alinhamento vertical central
+                    ("FONTSIZE", (0, 1), (-1, -1), 8),
+                    ("BOTTOMPADDING", (0, 1), (-1, -1), 5),
+                    ("TOPPADDING", (0, 1), (-1, -1), 5),
+                    # Grade
+                    ("GRID", (0, 0), (-1, -1), 1, colors.HexColor("#cbd5e0")),
+                    # Cores alternadas (exceto última linha)
+                    (
+                        "ROWBACKGROUNDS",
+                        (0, 1),
+                        (-1, ultima_linha - 1),
+                        [colors.white, colors.HexColor("#f7fafc")],
+                    ),
+                    # Estilo da linha de TOTAL
+                    (
+                        "BACKGROUND",
+                        (0, ultima_linha),
+                        (-1, ultima_linha),
+                        colors.HexColor("#1e3a8a"),
+                    ),
+                    ("TEXTCOLOR", (0, ultima_linha), (-1, ultima_linha), colors.white),
+                    (
+                        "FONTNAME",
+                        (0, ultima_linha),
+                        (-1, ultima_linha),
+                        "Helvetica-Bold",
+                    ),
+                ]
+            )
+        )
+
+        story.append(table)
+    else:
+        # ✅ Mensagem quando não há exames
+        story.append(
+            Paragraph(
+                "Nenhum exame foi solicitado no período filtrado.",
+                styles["NormalCompacto"],
+            )
+        )
 
     # Rodapé
     story.append(Spacer(1, 1 * cm))
@@ -1586,7 +1780,7 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
     )
     story.append(
         Paragraph(
-            "© 2025 - Desenvolvido por: Perito Criminal Sttefani Ribeiro | Versão 1.0.1",
+            "© 2025 - Desenvolvido por: Perito Criminal Sttefani Ribeiro | Versão 1.0",
             rodape_style,
         )
     )
