@@ -1,4 +1,4 @@
-# ocorrencias/serializers.py
+# ocorrencias/serializers.py - VERSÃO UNIFICADA E FINAL
 
 from rest_framework import serializers
 from django.utils import timezone
@@ -8,7 +8,7 @@ from ocorrencias.endereco_models import EnderecoOcorrencia
 from usuarios.models import User
 from .models import (
     Ocorrencia,
-    OcorrenciaExame,  # <--- ALTERAÇÃO 1: Importei o novo model
+    OcorrenciaExame,  # IMPORTADO
     ServicoPericial,
     UnidadeDemandante,
     Autoridade,
@@ -31,17 +31,8 @@ from usuarios.serializers import UserNestedSerializer
 
 
 # ========================================
-# SERIALIZER DE ENDEREÇO (AJUSTADO PARA FRONTEND)
+# SERIALIZER DE ENDEREÇO (CORRIGIDO PARA EDIÇÃO)
 # ========================================
-
-
-# ========================================
-# SERIALIZER DE ENDEREÇO (CORRIGIDO)
-# ========================================
-# Cole este código no arquivo ocorrencias/serializers.py
-# Substituindo o EnderecoOcorrenciaSerializer existente
-
-
 class EnderecoOcorrenciaSerializer(serializers.ModelSerializer):
     """Serializer para endereço de ocorrências externas"""
 
@@ -50,18 +41,18 @@ class EnderecoOcorrenciaSerializer(serializers.ModelSerializer):
     endereco_completo = serializers.ReadOnlyField()
     tem_coordenadas = serializers.ReadOnlyField()
 
-    # ✅ Leitura: Campo 'bairro' retorna o NOME do bairro (para exibição)
+    # Leitura: Campo 'bairro' retorna o NOME do bairro (para exibição)
     bairro = serializers.SerializerMethodField()
 
-    # ✅ Leitura: Campo 'bairro_nome' (mantido para compatibilidade)
+    # Leitura: Campo 'bairro_nome' (mantido para compatibilidade)
     bairro_nome = serializers.SerializerMethodField()
 
-    # ✅ NOVO: Retorna o ID do bairro para o frontend carregar no dropdown
+    # ✅ CORREÇÃO: Retorna o ID do bairro para o frontend carregar no dropdown de edição
     bairro_novo_id = serializers.IntegerField(
         source="bairro_novo.id", read_only=True, allow_null=True
     )
 
-    # ✅ Escrita: Recebe o ID do bairro e salva no campo 'bairro_novo'
+    # Escrita: Recebe o ID do bairro e salva no campo 'bairro_novo'
     bairro_id = serializers.PrimaryKeyRelatedField(
         queryset=Bairro.objects.all(),
         source="bairro_novo",
@@ -81,7 +72,7 @@ class EnderecoOcorrenciaSerializer(serializers.ModelSerializer):
             "numero",
             "complemento",
             "bairro_id",  # Escrita (envia ID)
-            "bairro_novo_id",  # ✅ NOVO: Leitura (retorna ID do bairro)
+            "bairro_novo_id",  # ✅ Leitura (retorna ID para edição)
             "bairro",  # Leitura (retorna nome para exibição)
             "bairro_nome",  # Extra
             "bairro_legado",  # Campo texto antigo
@@ -108,14 +99,14 @@ class EnderecoOcorrenciaSerializer(serializers.ModelSerializer):
 
 
 # ========================================
-# ALTERAÇÃO 2: NOVO SERIALIZER PARA EXAMES COM QUANTIDADE
+# SERIALIZER: EXAME COM QUANTIDADE (NOVO)
 # ========================================
 class OcorrenciaExameSerializer(serializers.ModelSerializer):
     """
     Mostra os detalhes do exame junto com a quantidade salva na ocorrência.
     """
 
-    # Campos que vêm do objeto Exame (read_only porque não mudamos o nome do exame aqui)
+    # Campos que vêm do objeto Exame
     id = serializers.ReadOnlyField(source="exame.id")
     codigo = serializers.ReadOnlyField(source="exame.codigo")
     nome = serializers.ReadOnlyField(source="exame.nome")
@@ -186,8 +177,7 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
     created_by = UserNestedSerializer(read_only=True)
     updated_by = UserNestedSerializer(read_only=True)
 
-    # ALTERAÇÃO 3: Usa o novo serializer para mostrar exames com quantidade
-    # source='ocorrenciaexame_set' pega os itens da tabela intermediária
+    # ✅ CORREÇÃO: Usa o novo serializer para mostrar exames com quantidade
     exames_solicitados = OcorrenciaExameSerializer(
         source="ocorrenciaexame_set", many=True, read_only=True
     )
@@ -311,7 +301,8 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
         write_only=True,
         help_text="Lista de IDs dos exames (substitui todos os existentes)",
     )
-    # ALTERAÇÃO 4: Atualiza o serializer de leitura no update também
+
+    # ✅ CORREÇÃO: Atualiza o serializer de leitura no update também
     exames_solicitados = OcorrenciaExameSerializer(
         source="ocorrenciaexame_set", many=True, read_only=True
     )
@@ -434,7 +425,7 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
             setattr(instance, field, value)
         instance.save()
 
-        # ALTERAÇÃO 5: Lógica de compatibilidade para salvar exames sem quantidade via update padrão
+        # ✅ CORREÇÃO: Lógica de compatibilidade para salvar exames sem quantidade via update padrão
         if exames_ids is not None:
             # Limpa exames antigos
             OcorrenciaExame.objects.filter(ocorrencia=instance).delete()
@@ -667,5 +658,12 @@ class OcorrenciaCreateSerializer(serializers.ModelSerializer):
         exames_ids = validated_data.pop("exames_ids", [])
         ocorrencia = Ocorrencia.objects.create(**validated_data)
         if exames_ids:
-            ocorrencia.exames_solicitados.set(exames_ids)
+            # Compatibilidade na criação: Salva qtd=1
+            from .models import OcorrenciaExame
+
+            novos = [
+                OcorrenciaExame(ocorrencia=ocorrencia, exame_id=eid, quantidade=1)
+                for eid in exames_ids
+            ]
+            OcorrenciaExame.objects.bulk_create(novos)
         return ocorrencia
