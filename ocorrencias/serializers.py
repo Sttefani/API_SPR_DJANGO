@@ -1,4 +1,4 @@
-# ocorrencias/serializers.py - VERSÃO UNIFICADA E FINAL
+# ocorrencias/serializers.py - VERSÃO CORRIGIDA COMPLETA
 
 from rest_framework import serializers
 from django.utils import timezone
@@ -251,6 +251,9 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
         return data
 
 
+# ============================================================================
+# ✅ CORREÇÃO: OcorrenciaUpdateSerializer - Aceita exames COM quantidade
+# ============================================================================
 class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
     perito_atribuido_id = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.filter(perfil="PERITO"),
@@ -294,15 +297,26 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
     cidade_id = serializers.PrimaryKeyRelatedField(
         queryset=Cidade.objects.all(), source="cidade", required=False, label="Cidade"
     )
+
+    # Campo legado: Lista de IDs (quantidade = 1)
     exames_ids = serializers.ListField(
         child=serializers.IntegerField(),
         required=False,
         allow_empty=True,
         write_only=True,
-        help_text="Lista de IDs dos exames (substitui todos os existentes)",
+        help_text="Lista de IDs dos exames (modo legado, qtd=1)",
     )
 
-    # ✅ CORREÇÃO: Atualiza o serializer de leitura no update também
+    # ✅ NOVO: Aceita lista de objetos {id, quantidade}
+    exames = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        allow_empty=True,
+        write_only=True,
+        help_text="Lista de exames com quantidade: [{id: 1, quantidade: 2}, ...]",
+    )
+
+    # Leitura: Retorna exames com quantidade
     exames_solicitados = OcorrenciaExameSerializer(
         source="ocorrenciaexame_set", many=True, read_only=True
     )
@@ -322,6 +336,7 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
             "procedimento_cadastrado_id",
             "perito_atribuido_id",
             "exames_ids",
+            "exames",  # ✅ NOVO CAMPO
             "exames_solicitados",
         ]
 
@@ -334,6 +349,21 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
             Exame.objects.filter(id__in=value).values_list("id", flat=True)
         )
         invalid_ids = set(value) - set(existing_ids)
+        if invalid_ids:
+            raise serializers.ValidationError(f"Exames inválidos: {list(invalid_ids)}")
+        return value
+
+    def validate_exames(self, value):
+        """✅ NOVO: Valida a lista de exames com quantidade"""
+        if not value:
+            return value
+        from exames.models import Exame
+
+        ids = [item.get("id") for item in value if item.get("id")]
+        existing_ids = list(
+            Exame.objects.filter(id__in=ids).values_list("id", flat=True)
+        )
+        invalid_ids = set(ids) - set(existing_ids)
         if invalid_ids:
             raise serializers.ValidationError(f"Exames inválidos: {list(invalid_ids)}")
         return value
@@ -367,7 +397,8 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
                 "Esta ocorrência está finalizada e não pode ser editada."
             )
 
-        if "exames_ids" in data:
+        # Verifica permissão para alterar exames (ambos os campos)
+        if "exames_ids" in data or "exames" in data:
             if instance.perito_atribuido:
                 if not user.is_superuser and user.id != instance.perito_atribuido.id:
                     raise serializers.ValidationError(
@@ -420,21 +451,45 @@ class OcorrenciaUpdateSerializer(serializers.ModelSerializer):
                         }
                     )
 
+        # =====================================================================
+        # ✅ CORREÇÃO: Prioriza 'exames' (com quantidade) sobre 'exames_ids'
+        # =====================================================================
+        exames_com_qtd = validated_data.pop("exames", None)
         exames_ids = validated_data.pop("exames_ids", None)
+
+        # Atualiza campos normais
         for field, value in validated_data.items():
             setattr(instance, field, value)
         instance.save()
 
-        # ✅ CORREÇÃO: Lógica de compatibilidade para salvar exames sem quantidade via update padrão
-        if exames_ids is not None:
-            # Limpa exames antigos
+        # Processa exames - prioriza o formato novo
+        if exames_com_qtd is not None:
+            # MODO NOVO: Lista de {id, quantidade}
             OcorrenciaExame.objects.filter(ocorrencia=instance).delete()
-            # Recria com quantidade 1
+            novos = []
+            for item in exames_com_qtd:
+                exame_id = item.get("id")
+                qtd = int(item.get("quantidade", 1))
+                if qtd < 1:
+                    qtd = 1
+                if exame_id:
+                    novos.append(
+                        OcorrenciaExame(
+                            ocorrencia=instance, exame_id=exame_id, quantidade=qtd
+                        )
+                    )
+            if novos:
+                OcorrenciaExame.objects.bulk_create(novos)
+
+        elif exames_ids is not None:
+            # MODO LEGADO: Lista de IDs (quantidade = 1)
+            OcorrenciaExame.objects.filter(ocorrencia=instance).delete()
             novos = [
                 OcorrenciaExame(ocorrencia=instance, exame_id=eid, quantidade=1)
                 for eid in exames_ids
             ]
-            OcorrenciaExame.objects.bulk_create(novos)
+            if novos:
+                OcorrenciaExame.objects.bulk_create(novos)
 
         return instance
 
@@ -548,6 +603,9 @@ class OcorrenciaDisplaySerializer(serializers.ModelSerializer):
         ]
 
 
+# ============================================================================
+# ✅ CORREÇÃO: OcorrenciaCreateSerializer - Aceita exames COM quantidade
+# ============================================================================
 class OcorrenciaCreateSerializer(serializers.ModelSerializer):
     servico_pericial_id = serializers.PrimaryKeyRelatedField(
         queryset=ServicoPericial.objects.all(),
@@ -592,6 +650,22 @@ class OcorrenciaCreateSerializer(serializers.ModelSerializer):
         label="Perito Atribuído",
     )
 
+    # Campo legado: Lista de IDs (quantidade = 1)
+    exames_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        allow_empty=True,
+        write_only=True,
+    )
+
+    # ✅ NOVO: Aceita lista de objetos {id, quantidade}
+    exames = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        allow_empty=True,
+        write_only=True,
+    )
+
     class Meta:
         model = Ocorrencia
         fields = [
@@ -609,6 +683,8 @@ class OcorrenciaCreateSerializer(serializers.ModelSerializer):
             "procedimento_cadastrado_id",
             "tipo_documento_origem_id",
             "perito_atribuido_id",
+            "exames_ids",
+            "exames",  # ✅ NOVO CAMPO
         ]
 
     def __init__(self, *args, **kwargs):
@@ -628,6 +704,21 @@ class OcorrenciaCreateSerializer(serializers.ModelSerializer):
             Exame.objects.filter(id__in=value).values_list("id", flat=True)
         )
         invalid_ids = set(value) - set(existing_ids)
+        if invalid_ids:
+            raise serializers.ValidationError(f"Exames inválidos: {list(invalid_ids)}")
+        return value
+
+    def validate_exames(self, value):
+        """✅ NOVO: Valida a lista de exames com quantidade"""
+        if not value:
+            return value
+        from exames.models import Exame
+
+        ids = [item.get("id") for item in value if item.get("id")]
+        existing_ids = list(
+            Exame.objects.filter(id__in=ids).values_list("id", flat=True)
+        )
+        invalid_ids = set(ids) - set(existing_ids)
         if invalid_ids:
             raise serializers.ValidationError(f"Exames inválidos: {list(invalid_ids)}")
         return value
@@ -655,15 +746,41 @@ class OcorrenciaCreateSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
-        exames_ids = validated_data.pop("exames_ids", [])
+        # =====================================================================
+        # ✅ CORREÇÃO: Prioriza 'exames' (com quantidade) sobre 'exames_ids'
+        # =====================================================================
+        exames_com_qtd = validated_data.pop("exames", None)
+        exames_ids = validated_data.pop("exames_ids", None)
+
         ocorrencia = Ocorrencia.objects.create(**validated_data)
-        if exames_ids:
-            # Compatibilidade na criação: Salva qtd=1
+
+        # Prioriza exames com quantidade
+        if exames_com_qtd:
+            from .models import OcorrenciaExame
+
+            novos = []
+            for item in exames_com_qtd:
+                exame_id = item.get("id")
+                qtd = int(item.get("quantidade", 1))
+                if qtd < 1:
+                    qtd = 1
+                if exame_id:
+                    novos.append(
+                        OcorrenciaExame(
+                            ocorrencia=ocorrencia, exame_id=exame_id, quantidade=qtd
+                        )
+                    )
+            if novos:
+                OcorrenciaExame.objects.bulk_create(novos)
+
+        elif exames_ids:
             from .models import OcorrenciaExame
 
             novos = [
                 OcorrenciaExame(ocorrencia=ocorrencia, exame_id=eid, quantidade=1)
                 for eid in exames_ids
             ]
-            OcorrenciaExame.objects.bulk_create(novos)
+            if novos:
+                OcorrenciaExame.objects.bulk_create(novos)
+
         return ocorrencia
