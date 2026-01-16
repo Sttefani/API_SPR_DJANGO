@@ -2,7 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
-from django.db.models import Q, Count, F, Case, When, Sum  # <--- ADICIONADO SUM
+from django.db.models import Q, Count, F, Case, When, Sum
 from django.db.models.functions import Coalesce
 from datetime import timedelta, datetime
 from ocorrencias.endereco_models import EnderecoOcorrencia
@@ -10,7 +10,7 @@ from servicos_periciais.models import ServicoPericial
 from usuarios.models import User
 from classificacoes.models import ClassificacaoOcorrencia
 
-from .models import Ocorrencia, OcorrenciaExame  # <--- ADICIONADO OcorrenciaExame
+from .models import Ocorrencia, OcorrenciaExame
 from .serializers import (
     EnderecoOcorrenciaSerializer,
     OcorrenciaCreateSerializer,
@@ -112,6 +112,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="relatorios-gerenciais")
     def relatorios_gerenciais(self, request):
+        # MANTIDO ORIGINAL - LÓGICA DO RELATÓRIO PDF/JSON COMPLETO
         queryset = self.get_queryset()
 
         data_inicio_str = request.query_params.get("data_inicio")
@@ -227,8 +228,18 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         servicos_queryset = ServicoPericial.objects.filter(deleted_at__isnull=True)
         por_servico = (
             servicos_queryset.annotate(
+                total_exames=Coalesce(
+                    Sum(
+                        "ocorrencias__ocorrenciaexame__quantidade",
+                        filter=Q(ocorrencias__in=queryset),
+                    ),
+                    0,
+                ),
                 total=Coalesce(
-                    Count("ocorrencias", filter=Q(ocorrencias__in=queryset)), 0
+                    Count(
+                        "ocorrencias", filter=Q(ocorrencias__in=queryset), distinct=True
+                    ),
+                    0,
                 ),
                 finalizadas=Coalesce(
                     Count(
@@ -236,6 +247,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                         filter=Q(
                             ocorrencias__in=queryset, ocorrencias__status="FINALIZADA"
                         ),
+                        distinct=True,
                     ),
                     0,
                 ),
@@ -245,11 +257,14 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                         filter=Q(
                             ocorrencias__in=queryset, ocorrencias__status="EM_ANALISE"
                         ),
+                        distinct=True,
                     ),
                     0,
                 ),
             )
-            .values("sigla", "nome", "total", "finalizadas", "em_analise")
+            .values(
+                "sigla", "nome", "total", "total_exames", "finalizadas", "em_analise"
+            )
             .order_by("-total")
         )
 
@@ -258,10 +273,36 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 "servico_pericial__sigla": item["sigla"],
                 "servico_pericial__nome": item["nome"],
                 "total": item["total"],
+                "total_exames": item["total_exames"],
                 "finalizadas": item["finalizadas"],
                 "em_analise": item["em_analise"],
             }
             for item in por_servico
+        ]
+
+        # =====================================================================
+        # QUERY BLINDADA DE EXAMES (AGORA COM SIGLA)
+        # =====================================================================
+        ids_ocorrencias = list(queryset.values_list("id", flat=True))
+        por_exame_qs = (
+            OcorrenciaExame.objects.filter(ocorrencia_id__in=ids_ocorrencias)
+            .values(
+                "exame__codigo", "exame__nome", "exame__servico_pericial__sigla"
+            )  # <--- SIGLA ADICIONADA
+            .annotate(quantidade_total=Sum("quantidade"))
+            .order_by(
+                "exame__servico_pericial__sigla", "exame__nome"
+            )  # Ordenação ajustada
+        )
+        por_exame_formatado = [
+            {
+                "codigo": i["exame__codigo"],
+                "nome": i["exame__nome"],
+                "servico_sigla": i["exame__servico_pericial__sigla"]
+                or "N/A",  # <--- Pega do banco
+                "quantidade": i["quantidade_total"],
+            }
+            for i in por_exame_qs
         ]
 
         return Response(
@@ -270,6 +311,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 "por_classificacao_especifica": list(por_classificacao_especifica),
                 "producao_por_perito": list(por_perito),
                 "por_servico": por_servico_formatado,
+                "por_exame": por_exame_formatado,
             }
         )
 
@@ -829,6 +871,9 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
     def relatorio_geral(self, request, *args, **kwargs):
         return gerar_pdf_relatorio_geral(request)
 
+    # =========================================================================
+    # ✅ FUNÇÃO ESTATÍSTICAS DO DASHBOARD (CORRIGIDA)
+    # =========================================================================
     @action(detail=False, methods=["get"])
     def estatisticas(self, request):
         user = self.request.user
@@ -839,272 +884,164 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         if servico_id in ["null", "", "undefined"]:
             servico_id = None
 
+        # Define qual queryset base usar
         if user.perfil == "PERITO":
-            minhas = Ocorrencia.objects.filter(
+            queryset_base = Ocorrencia.objects.filter(
                 perito_atribuido=user, deleted_at__isnull=True
             )
-
-            if servico_id:
-                minhas = minhas.filter(servico_pericial_id=servico_id)
-                servicos_ids = [int(servico_id)]
-            else:
-                servicos_ids = list(
-                    user.servicos_periciais.values_list("id", flat=True)
-                )
-
-            do_servico = Ocorrencia.objects.filter(
+            servicos_ids = list(user.servicos_periciais.values_list("id", flat=True))
+            queryset_servico = Ocorrencia.objects.filter(
                 servico_pericial_id__in=servicos_ids, deleted_at__isnull=True
             )
-
-            data_limite = hoje - timedelta(days=20)
-            atrasadas = minhas.filter(
-                status__in=["AGUARDANDO_PERITO", "EM_ANALISE"],
-                created_at__date__lt=data_limite,
+        elif user.perfil == "OPERACIONAL":
+            servicos_ids = list(user.servicos_periciais.values_list("id", flat=True))
+            queryset_base = Ocorrencia.objects.filter(
+                servico_pericial_id__in=servicos_ids, deleted_at__isnull=True
             )
-
-            finalizadas_mes = minhas.filter(
-                status="FINALIZADA", data_finalizacao__gte=inicio_mes
+            queryset_servico = queryset_base
+        else:  # ADMIN
+            queryset_base = Ocorrencia.objects.filter(deleted_at__isnull=True)
+            servicos_ids = list(
+                ServicoPericial.objects.filter(deleted_at__isnull=True).values_list(
+                    "id", flat=True
+                )
             )
+            queryset_servico = queryset_base
 
-            ultimas = minhas.order_by("-created_at")[:5].values(
+        if servico_id:
+            queryset_base = queryset_base.filter(servico_pericial_id=servico_id)
+            queryset_servico = queryset_servico.filter(servico_pericial_id=servico_id)
+            servicos_ids = [int(servico_id)]
+
+        # --- CÁLCULOS GERAIS ---
+        total = queryset_base.count()
+        aguardando = queryset_base.filter(status="AGUARDANDO_PERITO").count()
+        em_analise = queryset_base.filter(status="EM_ANALISE").count()
+        finalizadas = queryset_base.filter(status="FINALIZADA").count()
+        sem_perito = queryset_base.filter(perito_atribuido__isnull=True).count()
+
+        data_limite = hoje - timedelta(days=20)
+        atrasadas = queryset_base.filter(
+            status__in=["AGUARDANDO_PERITO", "EM_ANALISE"],
+            created_at__date__lt=data_limite,
+        ).count()
+
+        finalizadas_mes = queryset_base.filter(
+            status="FINALIZADA", data_finalizacao__gte=inicio_mes
+        ).count()
+
+        dias_30 = hoje - timedelta(days=30)
+        criadas_30dias = queryset_base.filter(created_at__date__gte=dias_30).count()
+        finalizadas_30dias = queryset_base.filter(
+            status="FINALIZADA", data_finalizacao__gte=dias_30
+        ).count()
+
+        # --- CÁLCULO POR SERVIÇO ---
+        por_servico_qs = (
+            ServicoPericial.objects.filter(id__in=servicos_ids, deleted_at__isnull=True)
+            .annotate(
+                total=Count(
+                    "ocorrencias",
+                    filter=Q(
+                        ocorrencias__in=queryset_servico,
+                        ocorrencias__deleted_at__isnull=True,
+                    ),
+                    distinct=True,
+                ),
+                total_exames=Coalesce(
+                    Sum(
+                        "exames__ocorrenciaexame__quantidade",
+                        filter=Q(
+                            exames__ocorrenciaexame__ocorrencia__in=queryset_servico
+                        ),
+                    ),
+                    0,
+                ),
+            )
+            .values("sigla", "nome", "total", "total_exames")
+            .order_by("-total")
+        )
+
+        por_servico = [
+            {
+                "servico_pericial__sigla": item["sigla"],
+                "servico_pericial__nome": item["nome"],
+                "total": item["total"],
+                "total_exames": item["total_exames"],
+            }
+            for item in por_servico_qs
+        ]
+
+        # --- CÁLCULO DOS EXAMES SOLICITADOS (ADICIONADO E AGORA COM SIGLA) ---
+        ids_ocorrencias = list(queryset_base.values_list("id", flat=True))
+
+        por_exame_qs = (
+            OcorrenciaExame.objects.filter(ocorrencia_id__in=ids_ocorrencias)
+            .values(
+                "exame__codigo", "exame__nome", "exame__servico_pericial__sigla"
+            )  # <--- SIGLA ADICIONADA
+            .annotate(quantidade_total=Sum("quantidade"))
+            .order_by("-quantidade_total")
+        )
+
+        por_exame = [
+            {
+                "codigo": item["exame__codigo"],
+                "nome": item["exame__nome"],
+                "servico_sigla": item["exame__servico_pericial__sigla"]
+                or "N/A",  # <--- Pega do banco
+                "quantidade": item["quantidade_total"],
+            }
+            for item in por_exame_qs
+        ]
+
+        # Dados extras para Perito
+        taxa_finalizacao = 0
+        participacao = 0
+        ultimas = []
+
+        if user.perfil == "PERITO":
+            if total > 0:
+                taxa_finalizacao = (finalizadas / total) * 100
+
+            total_servico = queryset_servico.count()
+            if total_servico > 0:
+                participacao = (total / total_servico) * 100
+
+            ultimas = queryset_base.order_by("-created_at")[:5].values(
                 "id", "numero_ocorrencia", "status", "created_at"
             )
 
-            total_minhas = minhas.count()
-            total_finalizadas = minhas.filter(status="FINALIZADA").count()
-            taxa_finalizacao = (
-                (total_finalizadas / total_minhas * 100) if total_minhas > 0 else 0
+        response_data = {
+            "geral": {
+                "total": total,
+                "aguardando": aguardando,
+                "em_analise": em_analise,
+                "finalizadas": finalizadas,
+                "sem_perito": sem_perito,
+                "atrasadas": atrasadas,
+                "finalizadas_este_mes": finalizadas_mes,
+            },
+            "ultimos_30_dias": {
+                "criadas": criadas_30dias,
+                "finalizadas": finalizadas_30dias,
+            },
+            "por_servico": por_servico,
+            "por_exame": por_exame,  # <--- Enviando a lista nova
+        }
+
+        if user.perfil == "PERITO":
+            response_data["minhas_ocorrencias"] = response_data["geral"]
+            response_data["minhas_ocorrencias"]["taxa_finalizacao"] = round(
+                taxa_finalizacao, 1
             )
+            response_data["servico"] = {
+                "total_geral": queryset_servico.count(),
+                "minha_participacao": round(participacao, 1),
+            }
+            response_data["ultimas_ocorrencias"] = list(ultimas)
 
-            total_servico = do_servico.count()
-            participacao = (
-                (total_minhas / total_servico * 100) if total_servico > 0 else 0
-            )
-
-            # ✅ AQUI: Soma de quantidades (total_exames)
-            por_servico_qs = (
-                ServicoPericial.objects.filter(
-                    id__in=servicos_ids, deleted_at__isnull=True
-                )
-                .annotate(
-                    total=Count(
-                        "ocorrencias",
-                        filter=Q(
-                            ocorrencias__in=minhas, ocorrencias__deleted_at__isnull=True
-                        ),
-                    ),
-                    total_exames=Coalesce(
-                        Sum(
-                            "exames__ocorrenciaexame__quantidade",
-                            filter=Q(exames__ocorrenciaexame__ocorrencia__in=minhas),
-                        ),
-                        0,
-                    ),
-                )
-                .values("sigla", "nome", "total", "total_exames")
-                .order_by("-total")
-            )
-
-            por_servico = [
-                {
-                    "servico_pericial__sigla": item["sigla"],
-                    "servico_pericial__nome": item["nome"],
-                    "total": item["total"],
-                    "total_exames": item["total_exames"],  # Envia para o front
-                }
-                for item in por_servico_qs
-            ]
-
-            return Response(
-                {
-                    "minhas_ocorrencias": {
-                        "total": total_minhas,
-                        "aguardando": minhas.filter(status="AGUARDANDO_PERITO").count(),
-                        "em_analise": minhas.filter(status="EM_ANALISE").count(),
-                        "finalizadas": total_finalizadas,
-                        "atrasadas": atrasadas.count(),
-                        "finalizadas_este_mes": finalizadas_mes.count(),
-                        "taxa_finalizacao": round(taxa_finalizacao, 1),
-                    },
-                    "servico": {
-                        "total_geral": total_servico,
-                        "minha_participacao": round(participacao, 1),
-                    },
-                    "ultimas_ocorrencias": list(ultimas),
-                    "por_servico": por_servico,
-                }
-            )
-
-        elif user.perfil == "OPERACIONAL":
-            servicos_ids = list(user.servicos_periciais.values_list("id", flat=True))
-
-            if servico_id:
-                servicos_ids = (
-                    [int(servico_id)]
-                    if int(servico_id) in servicos_ids
-                    else servicos_ids
-                )
-
-            todas = Ocorrencia.objects.filter(
-                servico_pericial_id__in=servicos_ids, deleted_at__isnull=True
-            )
-
-            data_limite = hoje - timedelta(days=20)
-            atrasadas = todas.filter(
-                status__in=["AGUARDANDO_PERITO", "EM_ANALISE"],
-                created_at__date__lt=data_limite,
-            )
-
-            finalizadas_mes = todas.filter(
-                status="FINALIZADA", data_finalizacao__gte=inicio_mes
-            )
-
-            por_servico_qs = (
-                ServicoPericial.objects.filter(
-                    id__in=servicos_ids, deleted_at__isnull=True
-                )
-                .annotate(
-                    total=Count(
-                        "ocorrencias",
-                        filter=Q(
-                            ocorrencias__in=todas, ocorrencias__deleted_at__isnull=True
-                        ),
-                    ),
-                    total_exames=Coalesce(
-                        Sum(
-                            "exames__ocorrenciaexame__quantidade",
-                            filter=Q(exames__ocorrenciaexame__ocorrencia__in=todas),
-                        ),
-                        0,
-                    ),
-                )
-                .values("sigla", "nome", "total", "total_exames")
-                .order_by("-total")
-            )
-
-            por_servico = [
-                {
-                    "servico_pericial__sigla": item["sigla"],
-                    "servico_pericial__nome": item["nome"],
-                    "total": item["total"],
-                    "total_exames": item["total_exames"],
-                }
-                for item in por_servico_qs
-            ]
-
-            dias_30 = hoje - timedelta(days=30)
-            criadas_30dias = todas.filter(created_at__date__gte=dias_30).count()
-            finalizadas_30dias = todas.filter(
-                status="FINALIZADA", data_finalizacao__gte=dias_30
-            ).count()
-
-            return Response(
-                {
-                    "geral": {
-                        "total": todas.count(),
-                        "aguardando": todas.filter(status="AGUARDANDO_PERITO").count(),
-                        "em_analise": todas.filter(status="EM_ANALISE").count(),
-                        "finalizadas": todas.filter(status="FINALIZADA").count(),
-                        "sem_perito": todas.filter(
-                            perito_atribuido__isnull=True
-                        ).count(),
-                        "atrasadas": atrasadas.count(),
-                        "finalizadas_este_mes": finalizadas_mes.count(),
-                    },
-                    "ultimos_30_dias": {
-                        "criadas": criadas_30dias,
-                        "finalizadas": finalizadas_30dias,
-                    },
-                    "por_servico": por_servico,
-                }
-            )
-
-        elif user.perfil == "ADMINISTRATIVO" or user.is_superuser:
-            todas = Ocorrencia.objects.filter(deleted_at__isnull=True)
-
-            if servico_id:
-                todas = todas.filter(servico_pericial_id=servico_id)
-
-            data_limite = hoje - timedelta(days=20)
-            atrasadas = todas.filter(
-                status__in=["AGUARDANDO_PERITO", "EM_ANALISE"],
-                created_at__date__lt=data_limite,
-            )
-
-            finalizadas_mes = todas.filter(
-                status="FINALIZADA", data_finalizacao__gte=inicio_mes
-            )
-
-            if servico_id:
-                servicos_ids = [int(servico_id)]
-            else:
-                servicos_ids = list(
-                    ServicoPericial.objects.filter(deleted_at__isnull=True).values_list(
-                        "id", flat=True
-                    )
-                )
-
-            por_servico_qs = (
-                ServicoPericial.objects.filter(
-                    id__in=servicos_ids, deleted_at__isnull=True
-                )
-                .annotate(
-                    total=Count(
-                        "ocorrencias",
-                        filter=Q(
-                            ocorrencias__in=todas, ocorrencias__deleted_at__isnull=True
-                        ),
-                    ),
-                    total_exames=Coalesce(
-                        Sum(
-                            "exames__ocorrenciaexame__quantidade",
-                            filter=Q(exames__ocorrenciaexame__ocorrencia__in=todas),
-                        ),
-                        0,
-                    ),
-                )
-                .values("sigla", "nome", "total", "total_exames")
-                .order_by("-total")
-            )
-
-            por_servico = [
-                {
-                    "servico_pericial__sigla": item["sigla"],
-                    "servico_pericial__nome": item["nome"],
-                    "total": item["total"],
-                    "total_exames": item["total_exames"],
-                }
-                for item in por_servico_qs
-            ]
-
-            dias_30 = hoje - timedelta(days=30)
-            criadas_30dias = todas.filter(created_at__date__gte=dias_30).count()
-            finalizadas_30dias = todas.filter(
-                status="FINALIZADA", data_finalizacao__gte=dias_30
-            ).count()
-
-            return Response(
-                {
-                    "geral": {
-                        "total": todas.count(),
-                        "aguardando": todas.filter(status="AGUARDANDO_PERITO").count(),
-                        "em_analise": todas.filter(status="EM_ANALISE").count(),
-                        "finalizadas": todas.filter(status="FINALIZADA").count(),
-                        "sem_perito": todas.filter(
-                            perito_atribuido__isnull=True
-                        ).count(),
-                        "atrasadas": atrasadas.count(),
-                        "finalizadas_este_mes": finalizadas_mes.count(),
-                    },
-                    "ultimos_30_dias": {
-                        "criadas": criadas_30dias,
-                        "finalizadas": finalizadas_30dias,
-                    },
-                    "por_servico": por_servico,
-                }
-            )
-
-        return Response({"detail": "Perfil não reconhecido"}, status=400)
+        return Response(response_data)
 
     @action(detail=True, methods=["post"])
     def vincular_procedimento(self, request, pk=None):
@@ -1152,7 +1089,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_200_OK,
                     )
 
-                # ✅ CORRIGIDO: Usando __str__() do modelo
                 message = (
                     f"Procedimento {procedimento_antigo} desvinculado com sucesso."
                 )
@@ -1162,7 +1098,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                     id=procedimento_id
                 )
                 ocorrencia.procedimento_cadastrado = procedimento_novo
-                # ✅ CORRIGIDO: Usando __str__() do modelo
                 message = f"Procedimento {procedimento_novo} vinculado com sucesso."
 
             ocorrencia.updated_by = request.user
@@ -1204,17 +1139,12 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         Endpoint exclusivo para o FullCalendar.
         Retorna ocorrências filtradas pelo range de datas visível no calendário.
         """
-        # O FullCalendar envia automaticamente 'start' e 'end' (ex: 2025-01-01)
         start_date = request.query_params.get("start")
         end_date = request.query_params.get("end")
 
-        # 1. Segurança: Usa o seu get_queryset() existente.
-        # Assim, se o usuário for PERITO, só vê as dele. Se for ADM, vê tudo.
         queryset = self.filter_queryset(self.get_queryset())
 
-        # 2. Filtro de Data (Crucial para performance com milhares de registros)
         if start_date and end_date:
-            # Remove horário da string se vier (ex: 2025-01-01T00:00:00 -> 2025-01-01)
             start = start_date.split("T")[0]
             end = end_date.split("T")[0]
 
@@ -1222,20 +1152,17 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 created_at__range=[start, end], created_at__isnull=False
             )
 
-        # 3. Busca Otimizada (.values): Pega só o necessário para pintar o calendário
-        # Isso é muito mais rápido que o Serializer padrão
         dados = queryset.values(
             "id",
             "numero_ocorrencia",
             "created_at",
             "hora_fato",
             "status",
-            "classificacao__nome",  # Para mostrar no título
+            "classificacao__nome",
         )
 
         eventos = []
 
-        # Cores baseadas no seu Status Choices
         cores = {
             "AGUARDANDO_PERITO": "#ffc107",  # Amarelo
             "EM_ANALISE": "#0d6efd",  # Azul
@@ -1249,9 +1176,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             data_completa = datetime.fromisoformat(str(d_cadastro))
             h_cadastro = data_completa.time().replace(second=0, microsecond=0)
 
-            # Cria string ISO (ex: "2025-11-21T14:30:00")
             dt_iso = datetime.combine(d_cadastro, h_cadastro).isoformat()
-            # print (str(dt_iso)) # Comentado para limpar logs
             titulo = f"{item['numero_ocorrencia']}"
             if item.get("classificacao__nome"):
                 titulo += f" - {item['classificacao__nome']}"
@@ -1261,10 +1186,8 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                     "id": item["id"],
                     "title": titulo,
                     "start": dt_iso,
-                    "color": cores.get(
-                        item["status"], "#6c757d"
-                    ),  # Cinza se status for estranho
-                    "allDay": h_cadastro is None,  # Se não tem hora, é dia todo
+                    "color": cores.get(item["status"], "#6c757d"),
+                    "allDay": h_cadastro is None,
                     "extendedProps": {"status": item["status"]},
                 }
             )
@@ -1283,7 +1206,6 @@ class EnderecoOcorrenciaViewSet(viewsets.ModelViewSet):
     permission_classes = [OcorrenciaPermission]
 
     def get_queryset(self):
-        """Filtra endereços baseado nas permissões do usuário"""
         user = self.request.user
         queryset = self.queryset
 
@@ -1304,7 +1226,6 @@ class EnderecoOcorrenciaViewSet(viewsets.ModelViewSet):
         """
         endereco = self.get_object()
 
-        # Validações
         if endereco.tipo != "EXTERNA":
             return Response(
                 {"error": "Apenas endereços externos podem ser geocodificados."},
@@ -1325,7 +1246,6 @@ class EnderecoOcorrenciaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Geocodifica
         sucesso = endereco.geocodificar_async()
 
         if sucesso:

@@ -195,7 +195,7 @@ def gerar_pdf_ocorrencia(ocorrencia, request):
         add_linha("Processo SEI", ocorrencia.processo_sei_numero)
 
     # =========================================================================
-    # ✅ NOVA SEÇÃO: EXAMES SOLICITADOS (COM QUANTIDADE)
+    # NOVA SEÇÃO: EXAMES SOLICITADOS (COM QUANTIDADE)
     # =========================================================================
     story.append(Paragraph("3.2. EXAMES SOLICITADOS", styles["Subtitulo"]))
 
@@ -1153,11 +1153,10 @@ def gerar_pdf_ocorrencias_por_cidade(cidade_id, request):
                         styles["OcorrenciaItem"],
                     )
                 )
-            if oc.classificacao:
+            if oc.cidade:
                 story.append(
                     Paragraph(
-                        f"<b>Classificação:</b> {oc.classificacao.nome}",
-                        styles["OcorrenciaItem"],
+                        f"<b>Cidade:</b> {oc.cidade.nome}", styles["OcorrenciaItem"]
                     )
                 )
 
@@ -1543,7 +1542,7 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
         story.append(Spacer(1, 0.7 * cm))
 
     # =========================================================================
-    # ✅ TABELA 4: PRODUÇÃO POR SERVIÇO (COM COLUNA DE EXAMES E TOTAL)
+    # TABELA 4: PRODUÇÃO POR SERVIÇO
     # =========================================================================
     if dados.get("por_servico") and len(dados["por_servico"]) > 0:
         story.append(Paragraph("Produção por Serviço Pericial", styles["Subtitulo"]))
@@ -1560,7 +1559,7 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
         total_em_analise = 0
 
         for item in dados["por_servico"]:
-            # ✅ CORREÇÃO: Usar apenas a SIGLA para evitar texto longo
+            # Usar apenas a SIGLA para evitar texto longo
             sigla = item.get("servico_pericial__sigla", "-")
 
             # Valores da linha
@@ -1585,7 +1584,7 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
                 ]
             )
 
-        # ✅ NOVO: Linha de TOTAL
+        # Linha de TOTAL
         table_data.append(
             [
                 "TOTAL",
@@ -1627,7 +1626,7 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
                         (-1, ultima_linha - 1),
                         [colors.white, colors.HexColor("#f7fafc")],
                     ),
-                    # ✅ NOVO: Estilo da linha de TOTAL
+                    # Estilo da linha de TOTAL
                     (
                         "BACKGROUND",
                         (0, ultima_linha),
@@ -1648,13 +1647,13 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
         story.append(table)
 
     # =========================================================================
-    # ✅ TABELA 5: EXAMES SOLICITADOS (NOVA)
+    # ✅ TABELA 5: EXAMES SOLICITADOS (NOVA - AGORA SIM!)
     # =========================================================================
     story.append(Spacer(1, 0.7 * cm))
     story.append(Paragraph("Exames Solicitados", styles["Subtitulo"]))
 
     if dados.get("por_exame") and len(dados["por_exame"]) > 0:
-        # ✅ Estilo para células com texto longo (quebra de linha)
+        # Estilo para células com texto longo
         estilo_celula = ParagraphStyle(
             "CelulaExame",
             parent=styles["Normal"],
@@ -1677,7 +1676,7 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
             # Acumula total
             total_quantidade += quantidade
 
-            # ✅ Usa Paragraph para permitir quebra de linha no nome do exame
+            # Usa Paragraph para permitir quebra de linha no nome do exame
             table_data.append(
                 [
                     codigo,
@@ -1697,7 +1696,7 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
             ]
         )
 
-        # ✅ Larguras ajustadas (coluna Exame maior para acomodar texto)
+        # Larguras ajustadas
         col_widths = [2.5 * cm, 12.5 * cm, 2 * cm, 2 * cm]
         table = Table(table_data, colWidths=col_widths)
 
@@ -1728,7 +1727,7 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
                         (0, 0),
                         (-1, -1),
                         "MIDDLE",
-                    ),  # ✅ Alinhamento vertical central
+                    ),  # Alinhamento vertical central
                     ("FONTSIZE", (0, 1), (-1, -1), 8),
                     ("BOTTOMPADDING", (0, 1), (-1, -1), 5),
                     ("TOPPADDING", (0, 1), (-1, -1), 5),
@@ -1761,7 +1760,7 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
 
         story.append(table)
     else:
-        # ✅ Mensagem quando não há exames
+        # Mensagem quando não há exames
         story.append(
             Paragraph(
                 "Nenhum exame foi solicitado no período filtrado.",
