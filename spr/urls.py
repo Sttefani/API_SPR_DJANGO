@@ -10,7 +10,11 @@ from rest_framework_simplejwt.views import TokenRefreshView
 # Importa TODAS as suas ViewSets
 from movimentacoes.views import MovimentacaoViewSet
 from ordens_servico.views import OrdemServicoViewSet
-from spr.views import EstatisticasCriminaisView, OcorrenciasGeoView
+from spr.views import (
+    DashboardCriminalView,
+    EstatisticasCriminaisView,
+    OcorrenciasGeoView,
+)
 from usuarios.views import (
     UserRegistrationViewSet,
     UserManagementViewSet,
@@ -90,6 +94,11 @@ urlpatterns = [
     path(
         "api/analise-criminal/mapa/", OcorrenciasGeoView.as_view(), name="analise-mapa"
     ),
+    path(
+        "api/analise-criminal/dashboard/",
+        DashboardCriminalView.as_view(),
+        name="analise-dashboard",
+    ),  # 🆕 NOVA LINHA
     # Autenticação
     path("api-auth/", include("rest_framework.urls")),
     path("api/change-password/", ChangePasswordView.as_view(), name="change-password"),
