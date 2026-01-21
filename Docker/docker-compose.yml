@@ -10,10 +10,14 @@ services:
       - postgres_data:/var/lib/postgresql/data/
       - ./postgres.conf:/etc/postgresql/postgresql.conf
       - ./pg_hba.conf:/etc/postgresql/pg_hba.conf
+      - /home/sistema/projetos/backup_spr_criminalistica:/backup
     environment:
       - POSTGRES_DB=api_spr_db
-      - POSTGRES_USER=postgres
+      - POSTGRES_USER=sistema
       - POSTGRES_PASSWORD=postgres
+      - POSTGRES_HOST:=localhost
+      - POSTGRES_PORT:=5432
+      - BACKUP_DIR:=/backup
       - TZ=America/Boa_Vista
     command: >
       postgres
@@ -22,21 +26,25 @@ services:
     restart: always
     networks:
       - spr_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sistema -d api_spr_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   web:
-    build: .
-    container_name: spr_ocorrencias_web
+    build: ..
+    container_name: spr_criminalistica_web
     command: gunicorn spr.wsgi:application --bind 0.0.0.0:8000 
     volumes:
       - media_volume:/app/media
-      - cron_data:/etc
     ports:
       - "8000:8000"
     depends_on:
-      db:
+      db_principal:
         condition: service_healthy
     environment:
-      - DATABASE_URL=postgres://postgres:postgres@db:5432/api_spr_db
+      - DATABASE_URL=postgres://postgres:postgres@db_principal:5432/api_spr_db
       - TZ=America/Boa_Vista
     restart: always
     deploy:
@@ -49,7 +57,6 @@ services:
 volumes:
   postgres_data:
   media_volume:
-  cron_data:
 
 networks:
   spr_network:

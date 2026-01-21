@@ -1,14 +1,15 @@
 version: "3.9"
 
 services:
-  postgres-backup:
+  db-backup:
     image: postgres:17.7
     container_name: spr_criminalistica_db_backup
     restart: always
     environment:
-      POSTGRES_USER: postgres
+      POSTGRES_USER: sistema
       POSTGRES_PASSWORD: postgres
       PGPASSWORD: postgres
+      TZ: America/Boa_Vista
     ports:
       - "5432:5432"
     volumes:
@@ -17,11 +18,10 @@ services:
       bash -c "
       if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
         rm -rf /var/lib/postgresql/data/*;
-        pg_basebackup -h 192.168.100.79 -D /var/lib/postgresql/data -U postgres -Fp -Xs -P -R -S standby_slot;
+        pg_basebackup -h 192.168.12.11 -D /var/lib/postgresql/data -U postgres -Fp -Xs -P -R -S standby_slot;
       fi;
-      exec postgres;
+      exec docker-entrypoint.sh postgres;
       "
-
 
 volumes:
   pg_standby_data:
