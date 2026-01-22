@@ -337,28 +337,50 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         )
         return Response(response_serializer.data)
 
-    def destroy(self, request, *args, **kwargs):
+    # =========================================================================
+    # NOVO: Sobrescreve retrieve para marcar movimentações como visualizadas
+    # =========================================================================
+    def retrieve(self, request, *args, **kwargs):
+        """
+        Retorna os detalhes de uma ocorrência.
+        Se o usuário for ADMINISTRATIVO ou SUPER_ADMIN, marca as movimentações como visualizadas.
+        """
         instance = self.get_object()
-        instance.soft_delete(user=self.request.user)
-        return Response(status=status.HTTP_204_NO_CONTENT)
 
-    @action(detail=False, methods=["get"])
-    def lixeira(self, request):
-        queryset = self.get_queryset().filter(deleted_at__isnull=False)
-        serializer = self.get_serializer(queryset, many=True)
+        # Marca movimentações como visualizadas se for admin
+        if request.user.perfil == "ADMINISTRATIVO" or request.user.is_superuser:
+            instance.movimentacoes.filter(visualizado_admin=False).update(
+                visualizado_admin=True
+            )
+
+        serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
-    @action(detail=True, methods=["get"])
-    def imprimir(self, request, pk=None):
-        ocorrencia = self.get_object()
-        pdf_response = gerar_pdf_ocorrencia(ocorrencia, request)
-        return pdf_response
+    def destroy(self, request, *args, **kwargs):
 
-    @action(detail=True, methods=["post"])
-    def restaurar(self, request, pk=None):
-        instance = self.get_object()
-        instance.restore()
-        serializer = self.get_serializer(instance)
+        def destroy(self, request, *args, **kwargs):
+            instance = self.get_object()
+            instance.soft_delete(user=self.request.user)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        @action(detail=False, methods=["get"])
+        def lixeira(self, request):
+            queryset = self.get_queryset().filter(deleted_at__isnull=False)
+            serializer = self.get_serializer(queryset, many=True)
+            return Response(serializer.data)
+
+        @action(detail=True, methods=["get"])
+        def imprimir(self, request, pk=None):
+            ocorrencia = self.get_object()
+            pdf_response = gerar_pdf_ocorrencia(ocorrencia, request)
+            return pdf_response
+
+        @action(detail=True, methods=["post"])
+        def restaurar(self, request, pk=None):
+            instance = self.get_object()
+            instance.restore()
+            serializer = self.get_serializer(instance)
+
         return Response(serializer.data)
 
     @action(detail=True, methods=["get", "post"])

@@ -39,8 +39,6 @@ from usuarios.serializers import UserNestedSerializer
 class EnderecoOcorrenciaSerializer(serializers.ModelSerializer):
     """Serializer para endereço de ocorrências externas"""
 
-    # ❌ REMOVIDO: from cidades.models import Bairro (estava aqui e era ignorado!)
-
     endereco_completo = serializers.ReadOnlyField()
     tem_coordenadas = serializers.ReadOnlyField()
 
@@ -119,6 +117,9 @@ class OcorrenciaExameSerializer(serializers.ModelSerializer):
         fields = ["id", "codigo", "nome", "servico", "quantidade"]
 
 
+# ========================================
+# SERIALIZER DE LISTAGEM (COM CAMPO NOVO)
+# ========================================
 class OcorrenciaListSerializer(serializers.ModelSerializer):
     status_prazo = serializers.SerializerMethodField()
     dias_prazo = serializers.SerializerMethodField()
@@ -128,6 +129,10 @@ class OcorrenciaListSerializer(serializers.ModelSerializer):
     created_by = UserNestedSerializer(read_only=True)
     esta_finalizada = serializers.BooleanField(read_only=True)
     classificacao = ClassificacaoOcorrenciaSerializer(read_only=True)
+
+    # ========== NOVO CAMPO ==========
+    tem_movimentacao_pendente = serializers.SerializerMethodField()
+    # ================================
 
     class Meta:
         model = Ocorrencia
@@ -145,6 +150,7 @@ class OcorrenciaListSerializer(serializers.ModelSerializer):
             "created_by",
             "esta_finalizada",
             "classificacao",
+            "tem_movimentacao_pendente",
         ]
 
     def get_status_prazo(self, obj):
@@ -164,6 +170,17 @@ class OcorrenciaListSerializer(serializers.ModelSerializer):
             return f"Concluído em {dias_totais} dias"
         dias_corridos = (timezone.now().date() - obj.created_at.date()).days
         return f"{dias_corridos} dias corridos"
+
+    # ========== NOVO MÉTODO ==========
+    def get_tem_movimentacao_pendente(self, obj):
+        """
+        Retorna True se existe movimentação não visualizada pelo admin.
+        """
+        return obj.movimentacoes.filter(
+            visualizado_admin=False, deleted_at__isnull=True
+        ).exists()
+
+    # =================================
 
 
 class OcorrenciaDetailSerializer(serializers.ModelSerializer):
