@@ -1045,10 +1045,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def vincular_procedimento(self, request, pk=None):
-        """
-        Vincula ou desvincula um procedimento a uma ocorrência,
-        registrando a alteração para fins de auditoria.
-        """
         ocorrencia = self.get_object()
         user = request.user
 
@@ -1060,12 +1056,22 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # ============================================================
+        # VALIDAÇÃO DE PERMISSÃO (ALTERADA)
+        # Agora permite: perito atribuído, super admin OU administrativo
+        # ============================================================
         if ocorrencia.perito_atribuido:
             is_perito_da_ocorrencia = user.id == ocorrencia.perito_atribuido.id
-            if not user.is_superuser and not is_perito_da_ocorrencia:
+            is_administrativo = user.perfil == "ADMINISTRATIVO"
+
+            if (
+                not user.is_superuser
+                and not is_perito_da_ocorrencia
+                and not is_administrativo
+            ):
                 return Response(
                     {
-                        "error": "Você não tem permissão para fazer isso. Apenas o perito da ocorrência ou um super administrador pode alterar o vínculo."
+                        "error": "Você não tem permissão para fazer isso. Apenas o perito da ocorrência, um administrador ou um super administrador pode alterar o vínculo."
                     },
                     status=status.HTTP_403_FORBIDDEN,
                 )
