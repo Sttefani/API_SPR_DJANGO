@@ -357,30 +357,27 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.soft_delete(user=self.request.user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
-        def destroy(self, request, *args, **kwargs):
-            instance = self.get_object()
-            instance.soft_delete(user=self.request.user)
-            return Response(status=status.HTTP_204_NO_CONTENT)
+    @action(detail=False, methods=["get"])
+    def lixeira(self, request):
+        queryset = self.get_queryset().filter(deleted_at__isnull=False)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
-        @action(detail=False, methods=["get"])
-        def lixeira(self, request):
-            queryset = self.get_queryset().filter(deleted_at__isnull=False)
-            serializer = self.get_serializer(queryset, many=True)
-            return Response(serializer.data)
+    @action(detail=True, methods=["get"])
+    def imprimir(self, request, pk=None):
+        ocorrencia = self.get_object()
+        pdf_response = gerar_pdf_ocorrencia(ocorrencia, request)
+        return pdf_response
 
-        @action(detail=True, methods=["get"])
-        def imprimir(self, request, pk=None):
-            ocorrencia = self.get_object()
-            pdf_response = gerar_pdf_ocorrencia(ocorrencia, request)
-            return pdf_response
-
-        @action(detail=True, methods=["post"])
-        def restaurar(self, request, pk=None):
-            instance = self.get_object()
-            instance.restore()
-            serializer = self.get_serializer(instance)
-
+    @action(detail=True, methods=["post"])
+    def restaurar(self, request, pk=None):
+        instance = self.get_object()
+        instance.restore()
+        serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
     @action(detail=True, methods=["get", "post"])
