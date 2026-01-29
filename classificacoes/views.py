@@ -2,6 +2,9 @@ from rest_framework import viewsets, status, filters
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.db.models import Q
+
+# IMPORTAÇÕES ADICIONADAS PARA ORDENAÇÃO NUMÉRICA
+from django.db.models.functions import Length
 from .models import ClassificacaoOcorrencia
 from .serializers import (
     ClassificacaoOcorrenciaSerializer,
@@ -11,16 +14,18 @@ from .permissions import ClassificacaoPermission
 
 
 class ClassificacaoOcorrenciaViewSet(viewsets.ModelViewSet):
-    # Base: Traz o pai junto para otimizar e ordena por código (essencial para árvores)
-    queryset = ClassificacaoOcorrencia.objects.select_related("parent").order_by(
-        "codigo"
+    # AJUSTE: Ordena pelo tamanho do código e depois pelo conteúdo
+    # Isso garante que '2' venha antes de '10' e '11.1' antes de '11.10'
+    queryset = (
+        ClassificacaoOcorrencia.objects.select_related("parent")
+        .annotate(codigo_len=Length("codigo"))
+        .order_by("codigo_len", "codigo")
     )
+
     serializer_class = ClassificacaoOcorrenciaSerializer
     permission_classes = [ClassificacaoPermission]
 
-    # Desativei o SearchFilter automático para usarmos nossa lógica manual robusta
     filter_backends = []
-
     pagination_class = None
 
     def get_queryset(self):
@@ -30,6 +35,7 @@ class ClassificacaoOcorrenciaViewSet(viewsets.ModelViewSet):
                 "parent"
             ).order_by("-deleted_at")
 
+        # Mantém a ordenação inteligente definida no queryset base
         queryset = super().get_queryset()
 
         # 2. Captura parâmetros
@@ -37,18 +43,14 @@ class ClassificacaoOcorrenciaViewSet(viewsets.ModelViewSet):
         parent_id = self.request.query_params.get("parent_id")
         raiz = self.request.query_params.get("raiz")
 
-        # 3. LÓGICA DE BUSCA MANUAL (A SOLUÇÃO DO SEU PROBLEMA)
+        # 3. LÓGICA DE BUSCA MANUAL
         if search:
             # Procura o termo no Nome/Código do item OU no Nome/Código do PAI do item
             queryset = queryset.filter(
                 Q(nome__icontains=search)
                 | Q(codigo__icontains=search)
-                | Q(
-                    parent__nome__icontains=search
-                )  # <--- Traz os filhos se o nome do pai bater
-                | Q(
-                    parent__codigo__icontains=search
-                )  # <--- Traz os filhos se o código do pai bater
+                | Q(parent__nome__icontains=search)
+                | Q(parent__codigo__icontains=search)
             ).distinct()  # Evita duplicatas
 
             # Quando tem busca, retornamos tudo o que achou, ignorando filtro de raiz
@@ -107,7 +109,11 @@ class ClassificacaoOcorrenciaViewSet(viewsets.ModelViewSet):
         """
         Retorna lista filtrada por serviço para uso em combobox
         """
-        queryset = ClassificacaoOcorrencia.objects.all().order_by("codigo")
+        # AJUSTE: Aplicando a mesma lógica de ordenação aqui
+        queryset = ClassificacaoOcorrencia.objects.annotate(
+            codigo_len=Length("codigo")
+        ).order_by("codigo_len", "codigo")
+
         servico_id = request.query_params.get("servico_id")
 
         if servico_id:
