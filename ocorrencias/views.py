@@ -5,7 +5,9 @@ from django.utils import timezone
 from django.db.models import Q, Count, F, Case, When, Sum
 from django.db.models.functions import Coalesce
 from datetime import timedelta, datetime
+from exames.models import Exame
 from ocorrencias.endereco_models import EnderecoOcorrencia
+from ocorrencias.views_relatorios import _montar_exames_hierarquicos
 from servicos_periciais.models import ServicoPericial
 from usuarios.models import User
 from classificacoes.models import ClassificacaoOcorrencia
@@ -281,60 +283,12 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         ]
 
         # =====================================================================
-        # QUERY DE EXAMES COM HIERARQUIA PAI/FILHO
+        # QUERY DE EXAMES COM HIERARQUIA PAI/FILHO (USANDO A LÓGICA NOVA)
         # =====================================================================
         ids_ocorrencias = list(queryset.values_list("id", flat=True))
-        por_exame_qs = (
-            OcorrenciaExame.objects.filter(ocorrencia_id__in=ids_ocorrencias)
-            .values(
-                "exame__id",
-                "exame__codigo",
-                "exame__nome",
-                "exame__parent__id",
-                "exame__parent__codigo",
-                "exame__parent__nome",
-                "exame__servico_pericial__sigla",
-            )
-            .annotate(quantidade_total=Sum("quantidade"))
-            .order_by("exame__servico_pericial__sigla", "exame__codigo")
-        )
 
-        pais_dict = {}
-        for item in por_exame_qs:
-            parent_id = item["exame__parent__id"]
-            servico_sigla = item["exame__servico_pericial__sigla"] or "N/A"
-
-            filho = {
-                "codigo": item["exame__codigo"],
-                "nome": item["exame__nome"],
-                "quantidade": item["quantidade_total"],
-            }
-
-            if parent_id:
-                if parent_id not in pais_dict:
-                    pais_dict[parent_id] = {
-                        "codigo": item["exame__parent__codigo"],
-                        "nome": item["exame__parent__nome"],
-                        "servico_sigla": servico_sigla,
-                        "quantidade_total": 0,
-                        "filhos": [],
-                    }
-                pais_dict[parent_id]["filhos"].append(filho)
-                pais_dict[parent_id]["quantidade_total"] += item["quantidade_total"]
-            else:
-                exame_id = item["exame__id"]
-                if exame_id not in pais_dict:
-                    pais_dict[exame_id] = {
-                        "codigo": item["exame__codigo"],
-                        "nome": item["exame__nome"],
-                        "servico_sigla": servico_sigla,
-                        "quantidade_total": item["quantidade_total"],
-                        "filhos": [],
-                    }
-                else:
-                    pais_dict[exame_id]["quantidade_total"] += item["quantidade_total"]
-
-        por_exame_formatado = sorted(pais_dict.values(), key=lambda x: x["codigo"])
+        # Chama a função infalível importada no topo do arquivo
+        por_exame_formatado = _montar_exames_hierarquicos(ids_ocorrencias)
 
         return Response(
             {
@@ -368,9 +322,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         )
         return Response(response_serializer.data)
 
-    # =========================================================================
-    # NOVO: Sobrescreve retrieve para marcar movimentações como visualizadas
-    # =========================================================================
     def retrieve(self, request, *args, **kwargs):
         """
         Retorna os detalhes de uma ocorrência.
@@ -921,9 +872,6 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
     def relatorio_geral(self, request, *args, **kwargs):
         return gerar_pdf_relatorio_geral(request)
 
-    # =========================================================================
-    # ✅ FUNÇÃO ESTATÍSTICAS DO DASHBOARD (CORRIGIDA)
-    # =========================================================================
     @action(detail=False, methods=["get"])
     def estatisticas(self, request):
         user = self.request.user
@@ -1022,60 +970,14 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             for item in por_servico_qs
         ]
 
-        # --- EXAMES COM HIERARQUIA PAI/FILHO ---
+        # =====================================================================
+        # EXAMES COM HIERARQUIA PAI/FILHO (USANDO A LÓGICA NOVA)
+        # =====================================================================
         ids_ocorrencias = list(queryset_base.values_list("id", flat=True))
 
-        por_exame_qs = (
-            OcorrenciaExame.objects.filter(ocorrencia_id__in=ids_ocorrencias)
-            .values(
-                "exame__id",
-                "exame__codigo",
-                "exame__nome",
-                "exame__parent__id",
-                "exame__parent__codigo",
-                "exame__parent__nome",
-                "exame__servico_pericial__sigla",
-            )
-            .annotate(quantidade_total=Sum("quantidade"))
-            .order_by("exame__servico_pericial__sigla", "exame__codigo")
-        )
-
-        pais_dict = {}
-        for item in por_exame_qs:
-            parent_id = item["exame__parent__id"]
-            servico_sigla = item["exame__servico_pericial__sigla"] or "N/A"
-
-            filho = {
-                "codigo": item["exame__codigo"],
-                "nome": item["exame__nome"],
-                "quantidade": item["quantidade_total"],
-            }
-
-            if parent_id:
-                if parent_id not in pais_dict:
-                    pais_dict[parent_id] = {
-                        "codigo": item["exame__parent__codigo"],
-                        "nome": item["exame__parent__nome"],
-                        "servico_sigla": servico_sigla,
-                        "quantidade_total": 0,
-                        "filhos": [],
-                    }
-                pais_dict[parent_id]["filhos"].append(filho)
-                pais_dict[parent_id]["quantidade_total"] += item["quantidade_total"]
-            else:
-                exame_id = item["exame__id"]
-                if exame_id not in pais_dict:
-                    pais_dict[exame_id] = {
-                        "codigo": item["exame__codigo"],
-                        "nome": item["exame__nome"],
-                        "servico_sigla": servico_sigla,
-                        "quantidade_total": item["quantidade_total"],
-                        "filhos": [],
-                    }
-                else:
-                    pais_dict[exame_id]["quantidade_total"] += item["quantidade_total"]
-
-        por_exame = sorted(pais_dict.values(), key=lambda x: x["codigo"])
+        # Chama a função infalível importada no topo do arquivo (com a variável correta!)
+        por_exame = _montar_exames_hierarquicos(ids_ocorrencias)
+        # =====================================================================
 
         # Dados extras para Perito
         taxa_finalizacao = 0
@@ -1109,7 +1011,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 "finalizadas": finalizadas_30dias,
             },
             "por_servico": por_servico,
-            "por_exame": por_exame,  # <--- Enviando a lista nova
+            "por_exame": por_exame,  # <--- Agora enviando a árvore certinha!
         }
 
         if user.perfil == "PERITO":
@@ -1301,10 +1203,6 @@ class EnderecoOcorrenciaViewSet(viewsets.ModelViewSet):
             return queryset
 
         return queryset.filter(ocorrencia__perito_atribuido=user)
-
-    # ========================================
-    # ✅ ADICIONE ESTE MÉTODO AQUI
-    # ========================================
 
     @action(detail=True, methods=["post"], url_path="geocodificar")
     def geocodificar_endereco(self, request, pk=None):

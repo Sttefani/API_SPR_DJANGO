@@ -17,60 +17,80 @@ from exames.models import Exame
 
 def _montar_exames_hierarquicos(ids_ocorrencias):
     """
-    Função auxiliar reutilizada pelo list() e gerar_pdf().
-    Retorna a lista de exames agrupados por pai/filho.
+    Função definitiva para agrupar exames em árvore (Pai/Filho).
+    À prova de duplicatas e infalível na soma.
     """
-    por_exame_qs = (
+    itens_agrupados = (
         OcorrenciaExame.objects.filter(ocorrencia_id__in=ids_ocorrencias)
-        .values(
-            "exame__id",
-            "exame__codigo",
-            "exame__nome",
-            "exame__parent__id",
-            "exame__parent__codigo",
-            "exame__parent__nome",
-            "exame__servico_pericial__sigla",
-        )
-        .annotate(quantidade_total=Sum("quantidade"))
-        .order_by("exame__servico_pericial__sigla", "exame__codigo")
+        .values("exame_id")
+        .annotate(qtd=Sum("quantidade"))
     )
 
-    pais_dict = {}
-    for item in por_exame_qs:
-        parent_id = item["exame__parent__id"]
-        servico_sigla = item["exame__servico_pericial__sigla"] or "-"
+    if not itens_agrupados:
+        return []
 
-        filho = {
-            "codigo": item["exame__codigo"],
-            "nome": item["exame__nome"],
-            "quantidade": item["quantidade_total"],
-        }
+    qtd_map = {item["exame_id"]: item["qtd"] for item in itens_agrupados}
+    exames_com_laudo_ids = list(qtd_map.keys())
 
-        if parent_id:
-            if parent_id not in pais_dict:
-                pais_dict[parent_id] = {
-                    "codigo": item["exame__parent__codigo"],
-                    "nome": item["exame__parent__nome"],
-                    "servico_sigla": servico_sigla,
+    # Busca os exames que tiveram laudos + os pais deles
+    exames_db = Exame.objects.select_related("parent", "servico_pericial").filter(
+        id__in=exames_com_laudo_ids
+    )
+
+    pais_ids_necessarios = set()
+    for ex in exames_db:
+        if ex.parent_id:
+            pais_ids_necessarios.add(ex.parent_id)
+
+    pais_faltantes = (
+        Exame.objects.select_related("servico_pericial")
+        .filter(id__in=pais_ids_necessarios)
+        .exclude(id__in=exames_com_laudo_ids)
+    )
+
+    todos_exames_map = {ex.id: ex for ex in list(exames_db) + list(pais_faltantes)}
+
+    arvore = {}
+
+    # Primeiro laço: Garante que TODOS os PAIS existam na árvore
+    for ex_id, ex in todos_exames_map.items():
+        if ex.parent_id is None:  # É um pai ou raiz
+            if ex.id not in arvore:
+                arvore[ex.id] = {
+                    "codigo": ex.codigo,
+                    "nome": ex.nome,
+                    "servico_sigla": (
+                        ex.servico_pericial.sigla if ex.servico_pericial else "-"
+                    ),
                     "quantidade_total": 0,
                     "filhos": [],
                 }
-            pais_dict[parent_id]["filhos"].append(filho)
-            pais_dict[parent_id]["quantidade_total"] += item["quantidade_total"]
-        else:
-            exame_id = item["exame__id"]
-            if exame_id not in pais_dict:
-                pais_dict[exame_id] = {
-                    "codigo": item["exame__codigo"],
-                    "nome": item["exame__nome"],
-                    "servico_sigla": servico_sigla,
-                    "quantidade_total": item["quantidade_total"],
-                    "filhos": [],
-                }
-            else:
-                pais_dict[exame_id]["quantidade_total"] += item["quantidade_total"]
 
-    return sorted(pais_dict.values(), key=lambda x: x["codigo"])
+    # Segundo laço: Distribui as quantidades e os filhos
+    for exame_id, qtd in qtd_map.items():
+        exame = todos_exames_map.get(exame_id)
+        if not exame:
+            continue
+
+        if exame.parent_id:  # É filho
+            pai = todos_exames_map.get(exame.parent_id)
+            if pai and pai.id in arvore:
+                arvore[pai.id]["filhos"].append(
+                    {"codigo": exame.codigo, "nome": exame.nome, "quantidade": qtd}
+                )
+                arvore[pai.id]["quantidade_total"] += qtd
+        else:  # É pai que recebeu laudo direto
+            if exame.id in arvore:
+                arvore[exame.id]["quantidade_total"] += qtd
+
+    def sort_key(codigo):
+        return [int(p) if p.isdigit() else p for p in (codigo or "").split(".")]
+
+    for pai in arvore.values():
+        pai["filhos"] = sorted(pai["filhos"], key=lambda x: sort_key(x["codigo"]))
+
+    resultado = [p for p in arvore.values() if p["quantidade_total"] > 0]
+    return sorted(resultado, key=lambda x: sort_key(x["codigo"]))
 
 
 class RelatoriosGerenciaisViewSet(viewsets.ViewSet):
