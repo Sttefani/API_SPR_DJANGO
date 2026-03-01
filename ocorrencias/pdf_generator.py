@@ -1692,7 +1692,7 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
                     [
                         f"   {filho.get('codigo', '-')}",
                         Paragraph(f"   {filho.get('nome', '-')}", estilo_celula),
-                        "",
+                        servico,
                         str(filho.get("quantidade", 0)),
                     ]
                 )
