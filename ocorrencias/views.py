@@ -281,29 +281,60 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         ]
 
         # =====================================================================
-        # QUERY BLINDADA DE EXAMES (AGORA COM SIGLA)
+        # QUERY DE EXAMES COM HIERARQUIA PAI/FILHO
         # =====================================================================
         ids_ocorrencias = list(queryset.values_list("id", flat=True))
         por_exame_qs = (
             OcorrenciaExame.objects.filter(ocorrencia_id__in=ids_ocorrencias)
             .values(
-                "exame__codigo", "exame__nome", "exame__servico_pericial__sigla"
-            )  # <--- SIGLA ADICIONADA
+                "exame__id",
+                "exame__codigo",
+                "exame__nome",
+                "exame__parent__id",
+                "exame__parent__codigo",
+                "exame__parent__nome",
+                "exame__servico_pericial__sigla",
+            )
             .annotate(quantidade_total=Sum("quantidade"))
-            .order_by(
-                "exame__servico_pericial__sigla", "exame__nome"
-            )  # Ordenação ajustada
+            .order_by("exame__servico_pericial__sigla", "exame__codigo")
         )
-        por_exame_formatado = [
-            {
-                "codigo": i["exame__codigo"],
-                "nome": i["exame__nome"],
-                "servico_sigla": i["exame__servico_pericial__sigla"]
-                or "N/A",  # <--- Pega do banco
-                "quantidade": i["quantidade_total"],
+
+        pais_dict = {}
+        for item in por_exame_qs:
+            parent_id = item["exame__parent__id"]
+            servico_sigla = item["exame__servico_pericial__sigla"] or "N/A"
+
+            filho = {
+                "codigo": item["exame__codigo"],
+                "nome": item["exame__nome"],
+                "quantidade": item["quantidade_total"],
             }
-            for i in por_exame_qs
-        ]
+
+            if parent_id:
+                if parent_id not in pais_dict:
+                    pais_dict[parent_id] = {
+                        "codigo": item["exame__parent__codigo"],
+                        "nome": item["exame__parent__nome"],
+                        "servico_sigla": servico_sigla,
+                        "quantidade_total": 0,
+                        "filhos": [],
+                    }
+                pais_dict[parent_id]["filhos"].append(filho)
+                pais_dict[parent_id]["quantidade_total"] += item["quantidade_total"]
+            else:
+                exame_id = item["exame__id"]
+                if exame_id not in pais_dict:
+                    pais_dict[exame_id] = {
+                        "codigo": item["exame__codigo"],
+                        "nome": item["exame__nome"],
+                        "servico_sigla": servico_sigla,
+                        "quantidade_total": item["quantidade_total"],
+                        "filhos": [],
+                    }
+                else:
+                    pais_dict[exame_id]["quantidade_total"] += item["quantidade_total"]
+
+        por_exame_formatado = sorted(pais_dict.values(), key=lambda x: x["codigo"])
 
         return Response(
             {
@@ -991,28 +1022,60 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             for item in por_servico_qs
         ]
 
-        # --- CÁLCULO DOS EXAMES SOLICITADOS (ADICIONADO E AGORA COM SIGLA) ---
+        # --- EXAMES COM HIERARQUIA PAI/FILHO ---
         ids_ocorrencias = list(queryset_base.values_list("id", flat=True))
 
         por_exame_qs = (
             OcorrenciaExame.objects.filter(ocorrencia_id__in=ids_ocorrencias)
             .values(
-                "exame__codigo", "exame__nome", "exame__servico_pericial__sigla"
-            )  # <--- SIGLA ADICIONADA
+                "exame__id",
+                "exame__codigo",
+                "exame__nome",
+                "exame__parent__id",
+                "exame__parent__codigo",
+                "exame__parent__nome",
+                "exame__servico_pericial__sigla",
+            )
             .annotate(quantidade_total=Sum("quantidade"))
-            .order_by("-quantidade_total")
+            .order_by("exame__servico_pericial__sigla", "exame__codigo")
         )
 
-        por_exame = [
-            {
+        pais_dict = {}
+        for item in por_exame_qs:
+            parent_id = item["exame__parent__id"]
+            servico_sigla = item["exame__servico_pericial__sigla"] or "N/A"
+
+            filho = {
                 "codigo": item["exame__codigo"],
                 "nome": item["exame__nome"],
-                "servico_sigla": item["exame__servico_pericial__sigla"]
-                or "N/A",  # <--- Pega do banco
                 "quantidade": item["quantidade_total"],
             }
-            for item in por_exame_qs
-        ]
+
+            if parent_id:
+                if parent_id not in pais_dict:
+                    pais_dict[parent_id] = {
+                        "codigo": item["exame__parent__codigo"],
+                        "nome": item["exame__parent__nome"],
+                        "servico_sigla": servico_sigla,
+                        "quantidade_total": 0,
+                        "filhos": [],
+                    }
+                pais_dict[parent_id]["filhos"].append(filho)
+                pais_dict[parent_id]["quantidade_total"] += item["quantidade_total"]
+            else:
+                exame_id = item["exame__id"]
+                if exame_id not in pais_dict:
+                    pais_dict[exame_id] = {
+                        "codigo": item["exame__codigo"],
+                        "nome": item["exame__nome"],
+                        "servico_sigla": servico_sigla,
+                        "quantidade_total": item["quantidade_total"],
+                        "filhos": [],
+                    }
+                else:
+                    pais_dict[exame_id]["quantidade_total"] += item["quantidade_total"]
+
+        por_exame = sorted(pais_dict.values(), key=lambda x: x["codigo"])
 
         # Dados extras para Perito
         taxa_finalizacao = 0

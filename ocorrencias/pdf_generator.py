@@ -1667,24 +1667,35 @@ def gerar_pdf_relatorios_gerenciais(dados, filtros, request):
         # Variável para totalização
         total_quantidade = 0
 
-        for item in dados["por_exame"]:
-            codigo = item.get("codigo", "-")
-            nome = item.get("nome", "-")
-            servico = item.get("servico_sigla", "-")
-            quantidade = item.get("quantidade", 0)
+        for pai in dados["por_exame"]:
+            codigo_pai = pai.get("codigo", "-")
+            nome_pai = pai.get("nome", "-")
+            servico = pai.get("servico_sigla", "-")
+            qtd_pai = pai.get("quantidade_total", 0)
 
             # Acumula total
-            total_quantidade += quantidade
+            total_quantidade += qtd_pai
 
-            # Usa Paragraph para permitir quebra de linha no nome do exame
+            # Linha do PAI (negrito)
             table_data.append(
                 [
-                    codigo,
-                    Paragraph(nome, estilo_celula),
+                    Paragraph(f"<b>{codigo_pai}</b>", estilo_celula),
+                    Paragraph(f"<b>{nome_pai}</b>", estilo_celula),
                     servico,
-                    str(quantidade),
+                    str(qtd_pai),
                 ]
             )
+
+            # Linhas dos FILHOS (indentados)
+            for filho in pai.get("filhos", []):
+                table_data.append(
+                    [
+                        f"   {filho.get('codigo', '-')}",
+                        Paragraph(f"   {filho.get('nome', '-')}", estilo_celula),
+                        "",
+                        str(filho.get("quantidade", 0)),
+                    ]
+                )
 
         # Linha de TOTAL
         table_data.append(
