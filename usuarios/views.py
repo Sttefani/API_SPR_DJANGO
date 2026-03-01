@@ -5,6 +5,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.filters import SearchFilter
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .models import User
@@ -41,6 +43,8 @@ class UserManagementViewSet(
     queryset = User.objects.filter(is_superuser=False).order_by("-created_at")
     serializer_class = UserManagementSerializer
     permission_classes = [IsSuperAdminUser]
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    search_fields = ["nome_completo", "email", "cpf"]
     filterset_fields = ["nome_completo", "email", "cpf", "status", "perfil"]
 
     def update(self, request, *args, **kwargs):
@@ -78,10 +82,6 @@ class UserManagementViewSet(
 
             traceback.print_exc()
             raise
-
-    def perform_update(self, serializer):
-        """Salva quem foi o último a atualizar o usuário."""
-        serializer.save(updated_by=self.request.user)
 
     def perform_update(self, serializer):
         """Salva quem foi o último a atualizar o usuário."""
