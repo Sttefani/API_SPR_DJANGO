@@ -1,22 +1,18 @@
+# exames/views.py
+
 from rest_framework import viewsets, status, filters
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django_filters.rest_framework import DjangoFilterBackend
 
-# IMPORTAÇÃO ADICIONADA PARA A ORDENAÇÃO CORRETA
-from django.db.models.functions import Length
 from .models import Exame
 from .serializers import ExameSerializer, ExameLixeiraSerializer
 from .permissions import ExamePermission
 
 
 class ExameViewSet(viewsets.ModelViewSet):
-    # AJUSTE: Agora o queryset base já vem ordenado de forma "inteligente"
-    queryset = (
-        Exame.objects.select_related("parent", "servico_pericial")
-        .annotate(codigo_len=Length("codigo"))
-        .order_by("codigo_len", "codigo")
-    )
+    # AJUSTE: Queryset base limpo. A ordenação pesada será feita no método 'list'.
+    queryset = Exame.objects.select_related("parent", "servico_pericial").all()
 
     serializer_class = ExameSerializer
     permission_classes = [ExamePermission]
@@ -30,13 +26,33 @@ class ExameViewSet(viewsets.ModelViewSet):
         if self.action in ["restaurar", "lixeira"]:
             return Exame.all_objects.select_related("parent", "servico_pericial").all()
 
-        # Para as demais ações, usa o queryset ordenado numericamente definido acima
+        # Para as demais ações, usa o queryset padrão definido acima
         return super().get_queryset()
 
     def get_serializer_class(self):
         if self.action == "lixeira":
             return ExameLixeiraSerializer
         return ExameSerializer
+
+    # --- NOVO MÉTODO DE LISTAGEM COM ORDENAÇÃO INTELIGENTE (PYTHON) ---
+    def list(self, request, *args, **kwargs):
+        # 1. Pega os dados do banco já aplicando os filtros (pesquisa, serviço, etc.)
+        queryset = self.filter_queryset(self.get_queryset())
+
+        # 2. Ordena os resultados em memória usando Python.
+        # Essa lógica separa ex: "10.1.2" em [10, 1, 2] e compara matematicamente.
+        exames_ordenados = sorted(
+            queryset,
+            key=lambda x: [
+                int(p) if p.isdigit() else p for p in (x.codigo or "").split(".")
+            ],
+        )
+
+        # 3. Passa a lista perfeitamente ordenada para o Serializer
+        serializer = self.get_serializer(exames_ordenados, many=True)
+        return Response(serializer.data)
+
+    # -------------------------------------------------------------------
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
@@ -54,7 +70,9 @@ class ExameViewSet(viewsets.ModelViewSet):
         lixeira_qs = (
             Exame.all_objects.select_related("parent", "servico_pericial")
             .filter(deleted_at__isnull=False)
-            .order_by("-deleted_at")
+            .order_by(
+                "-deleted_at"
+            )  # Na lixeira, faz sentido ordenar pelos mais recentes deletados
         )
         serializer = self.get_serializer(lixeira_qs, many=True)
         return Response(serializer.data)
