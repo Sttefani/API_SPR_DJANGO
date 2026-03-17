@@ -106,4 +106,6 @@ urlpatterns = [
     path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     # Inclui as rotas do app de Inteligência Artificial
     path("api/ia/", include("IA.urls")),
+    # Auditoria
+    path("api/auditlog/", include("auditlog.urls")),
 ]
