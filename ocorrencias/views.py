@@ -1,6 +1,8 @@
+import csv
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.http import HttpResponse
 from django.utils import timezone
 from django.db.models import Q, Count, F, Case, When, Sum
 from django.db.models.functions import Coalesce
@@ -22,12 +24,15 @@ from .serializers import (
     OcorrenciaLixeiraSerializer,
     FinalizarComAssinaturaSerializer,
     ReabrirOcorrenciaSerializer,
+    EntregarLaudoSerializer,
 )
 from .permissions import (
     OcorrenciaPermission,
     PodeEditarOcorrencia,
+    PodeEntregarLaudo,
     PodeFinalizarOcorrencia,
     PodeReabrirOcorrencia,
+    PodeReverterLaudo,
     PeritoAtribuidoRequired,
     PodeVerRelatoriosGerenciais,
 )
@@ -80,6 +85,12 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             return [PodeFinalizarOcorrencia()]
         if self.action == "reabrir":
             return [PodeReabrirOcorrencia()]
+        if self.action == "entregar_laudo":
+            return [PodeEntregarLaudo()]
+        if self.action == "reverter_laudo":
+            return [PodeReverterLaudo()]
+        if self.action == "exportar_csv":
+            return [PodeVerRelatoriosGerenciais()]
         if self.action in ["update", "partial_update"]:
             return [PodeEditarOcorrencia()]
         return [permission() for permission in self.permission_classes]
@@ -93,6 +104,8 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             return FinalizarComAssinaturaSerializer
         if self.action == "reabrir":
             return ReabrirOcorrenciaSerializer
+        if self.action == "entregar_laudo":
+            return EntregarLaudoSerializer
         if self.action in ["update", "partial_update"]:
             return OcorrenciaUpdateSerializer
         if self.action == "create":
@@ -290,6 +303,66 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         # Chama a função infalível importada no topo do arquivo
         por_exame_formatado = _montar_exames_hierarquicos(ids_ocorrencias)
 
+        # =====================================================================
+        # TEMPO MÉDIO POR FASE
+        # =====================================================================
+        def _media_dias(registros, campo_fim, campo_inicio):
+            deltas = []
+            for r in registros:
+                fim = r.get(campo_fim)
+                inicio = r.get(campo_inicio)
+                if fim and inicio:
+                    delta = (fim - inicio).total_seconds() / 86400
+                    if delta >= 0:
+                        deltas.append(delta)
+            if not deltas:
+                return None
+            return round(sum(deltas) / len(deltas), 1)
+
+        registros_laudo = list(
+            queryset.filter(data_laudo_entregue__isnull=False).values(
+                "created_at", "data_laudo_entregue", "data_finalizacao",
+                "perito_atribuido__nome_completo"
+            )
+        )
+        registros_finalizados = list(
+            queryset.filter(status="FINALIZADA", data_finalizacao__isnull=False).values(
+                "created_at", "data_laudo_entregue", "data_finalizacao"
+            )
+        )
+
+        media_criacao_laudo = _media_dias(
+            registros_laudo, "data_laudo_entregue", "created_at"
+        )
+        media_laudo_finalizacao = _media_dias(
+            [r for r in registros_laudo if r.get("data_finalizacao")],
+            "data_finalizacao", "data_laudo_entregue"
+        )
+        media_total = _media_dias(
+            registros_finalizados, "data_finalizacao", "created_at"
+        )
+
+        from collections import defaultdict
+        perito_map = defaultdict(list)
+        for r in registros_laudo:
+            nome = r.get("perito_atribuido__nome_completo")
+            if nome and r.get("data_laudo_entregue") and r.get("created_at"):
+                dias = (r["data_laudo_entregue"] - r["created_at"]).total_seconds() / 86400
+                if dias >= 0:
+                    perito_map[nome].append(dias)
+
+        tempo_por_perito = sorted(
+            [
+                {
+                    "nome_completo": nome,
+                    "total_laudos": len(dias),
+                    "media_criacao_laudo_dias": round(sum(dias) / len(dias), 1),
+                }
+                for nome, dias in perito_map.items()
+            ],
+            key=lambda x: x["media_criacao_laudo_dias"],
+        )
+
         return Response(
             {
                 "por_grupo_principal": list(por_grupo_principal),
@@ -297,6 +370,13 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 "producao_por_perito": list(por_perito),
                 "por_servico": por_servico_formatado,
                 "por_exame": por_exame_formatado,
+                "tempo_medio_fases": {
+                    "media_criacao_laudo_dias": media_criacao_laudo,
+                    "media_laudo_finalizacao_dias": media_laudo_finalizacao,
+                    "media_total_dias": media_total,
+                    "total_com_laudo": len(registros_laudo),
+                    "por_perito": tempo_por_perito,
+                },
             }
         )
 
@@ -382,13 +462,17 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 )
 
             # Validação 2: Status correto
-            if ocorrencia.status != Ocorrencia.Status.EM_ANALISE:
+            _status_finalizaveis = (
+                Ocorrencia.Status.EM_ANALISE,
+                Ocorrencia.Status.LAUDO_ENTREGUE,
+            )
+            if ocorrencia.status not in _status_finalizaveis:
                 status_atual = ocorrencia.get_status_display()
                 return Response(
                     {
                         "error": (
                             f'❌ Não é possível finalizar esta ocorrência: Status atual é "{status_atual}". '
-                            'Apenas ocorrências com status "Em Análise" podem ser finalizadas. '
+                            'Apenas ocorrências "Em Análise" ou "Laudo Entregue" podem ser finalizadas. '
                             "Verifique o status da ocorrência e tente novamente."
                         )
                     },
@@ -492,6 +576,81 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance=ocorrencia)
         return Response(serializer.data)
 
+    @action(detail=True, methods=["post"])
+    def entregar_laudo(self, request, pk=None):
+        """Perito (ou Super Admin) registra que o laudo foi entregue."""
+        ocorrencia = self.get_object()
+
+        if ocorrencia.status != Ocorrencia.Status.EM_ANALISE:
+            return Response(
+                {
+                    "error": (
+                        f'❌ Status atual é "{ocorrencia.get_status_display()}". '
+                        'Apenas ocorrências "Em Análise" podem ter laudo entregue registrado.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not ocorrencia.perito_atribuido:
+            return Response(
+                {"error": "❌ É necessário ter um perito atribuído para registrar a entrega do laudo."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = request.user
+        if not user.is_superuser and user.id != ocorrencia.perito_atribuido.id:
+            return Response(
+                {"error": "❌ Apenas o perito atribuído ou um Super Admin pode registrar a entrega do laudo."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        ip_address = request.META.get("REMOTE_ADDR", "127.0.0.1")
+        ocorrencia.entregar_laudo(request.user, ip_address)
+
+        response_serializer = OcorrenciaDetailSerializer(ocorrencia, context={"request": request})
+        return Response(
+            {
+                "message": (
+                    f"✅ Laudo da ocorrência {ocorrencia.numero_ocorrencia} registrado como entregue. "
+                    "O setor Administrativo foi notificado para proceder com a finalização."
+                ),
+                "ocorrencia": response_serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"])
+    def reverter_laudo(self, request, pk=None):
+        """Administrativo ou Super Admin reverte LAUDO_ENTREGUE → EM_ANALISE."""
+        ocorrencia = self.get_object()
+
+        if ocorrencia.status != Ocorrencia.Status.LAUDO_ENTREGUE:
+            return Response(
+                {
+                    "error": (
+                        f'❌ Status atual é "{ocorrencia.get_status_display()}". '
+                        'Apenas ocorrências com status "Laudo Entregue" podem ser revertidas.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ip_address = request.META.get("REMOTE_ADDR", "127.0.0.1")
+        ocorrencia.reverter_para_analise(request.user, ip_address)
+
+        response_serializer = OcorrenciaDetailSerializer(ocorrencia, context={"request": request})
+        return Response(
+            {
+                "message": f"✅ Ocorrência {ocorrencia.numero_ocorrencia} revertida para 'Em Análise'.",
+                "ocorrencia": response_serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
     @action(detail=True, methods=["patch"])
     def atribuir_perito(self, request, pk=None):
         ocorrencia = self.get_object()
@@ -551,6 +710,12 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         )
         serializer = self.get_serializer(queryset, many=True)
         return Response({"count": queryset.count(), "results": serializer.data})
+
+    @action(detail=False, methods=["get"], url_path="aguardando-finalizacao-count")
+    def aguardando_finalizacao_count(self, request):
+        """Retorna contagem de ocorrências com LAUDO_ENTREGUE para o badge do menu."""
+        count = self.get_queryset().filter(status="LAUDO_ENTREGUE").count()
+        return Response({"count": count})
 
     @action(detail=True, methods=["get"])
     def historico_assinatura(self, request, pk=None):
@@ -872,6 +1037,84 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
     def relatorio_geral(self, request, *args, **kwargs):
         return gerar_pdf_relatorio_geral(request)
 
+    @action(detail=False, methods=["get"], url_path="exportar-csv")
+    def exportar_csv(self, request):
+        import io
+        try:
+            tz_local = timezone.get_current_timezone()
+            STATUS_LABELS = {
+                "AGUARDANDO_PERITO": "Aguardando Perito",
+                "EM_ANALISE": "Em Analise",
+                "LAUDO_ENTREGUE": "Laudo Entregue",
+                "FINALIZADA": "Finalizada",
+            }
+
+            queryset = (
+                self.filter_queryset(self.get_queryset())
+                .select_related(
+                    "servico_pericial",
+                    "unidade_demandante",
+                    "perito_atribuido",
+                    "autoridade",
+                    "classificacao",
+                    "cidade",
+                )
+                .order_by("-created_at")
+            )
+
+            def fmt_dt(dt):
+                return dt.astimezone(tz_local).strftime("%d/%m/%Y %H:%M") if dt else ""
+
+            def fmt_d(d):
+                return d.strftime("%d/%m/%Y") if d else ""
+
+            buffer = io.StringIO()
+            writer = csv.writer(buffer, delimiter=";")
+            writer.writerow([
+                "Numero",
+                "Status",
+                "Servico",
+                "Unidade Demandante",
+                "Perito",
+                "Autoridade",
+                "Classificacao",
+                "Cidade",
+                "Data do Fato",
+                "Registrado em",
+                "Laudo Entregue em",
+                "Finalizado em",
+            ])
+
+            for oc in queryset:
+                writer.writerow([
+                    oc.numero_ocorrencia,
+                    STATUS_LABELS.get(oc.status, oc.status),
+                    f"{oc.servico_pericial.sigla} - {oc.servico_pericial.nome}" if oc.servico_pericial else "",
+                    f"{oc.unidade_demandante.sigla} - {oc.unidade_demandante.nome}" if oc.unidade_demandante else "",
+                    oc.perito_atribuido.nome_completo if oc.perito_atribuido else "Nao atribuido",
+                    oc.autoridade.nome if oc.autoridade else "",
+                    f"{oc.classificacao.codigo} - {oc.classificacao.nome}" if oc.classificacao else "",
+                    oc.cidade.nome if oc.cidade else "",
+                    fmt_d(oc.data_fato),
+                    fmt_dt(oc.created_at),
+                    fmt_dt(oc.data_laudo_entregue),
+                    fmt_dt(oc.data_finalizacao),
+                ])
+
+            # utf-8-sig adiciona BOM automaticamente — Excel abre com acentos corretos
+            content = buffer.getvalue().encode("utf-8-sig")
+            response = HttpResponse(content, content_type="text/csv; charset=utf-8")
+            response["Content-Disposition"] = 'attachment; filename="ocorrencias.csv"'
+            return response
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {"error": f"Erro ao gerar exportacao: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
     @action(detail=False, methods=["get"])
     def estatisticas(self, request):
         user = self.request.user
@@ -915,6 +1158,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         total = queryset_base.count()
         aguardando = queryset_base.filter(status="AGUARDANDO_PERITO").count()
         em_analise = queryset_base.filter(status="EM_ANALISE").count()
+        laudo_entregue = queryset_base.filter(status="LAUDO_ENTREGUE").count()
         finalizadas = queryset_base.filter(status="FINALIZADA").count()
         sem_perito = queryset_base.filter(perito_atribuido__isnull=True).count()
 
@@ -1001,6 +1245,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 "total": total,
                 "aguardando": aguardando,
                 "em_analise": em_analise,
+                "laudo_entregue": laudo_entregue,
                 "finalizadas": finalizadas,
                 "sem_perito": sem_perito,
                 "atrasadas": atrasadas,
@@ -1156,6 +1401,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         cores = {
             "AGUARDANDO_PERITO": "#ffc107",  # Amarelo
             "EM_ANALISE": "#0d6efd",  # Azul
+            "LAUDO_ENTREGUE": "#8B5CF6",  # Roxo
             "FINALIZADA": "#198754",  # Verde
         }
 

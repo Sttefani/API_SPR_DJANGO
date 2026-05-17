@@ -232,6 +232,102 @@ def gerar_pdf_ocorrencia(ocorrencia, request):
     if not ficha_impressa:
         add_paragrafo("Nenhuma ficha específica associada.")
 
+    # =========================================================================
+    # SEÇÃO: HISTÓRICO DE TRAMITAÇÃO (TIMESTAMPS DE CADA STATUS)
+    # =========================================================================
+    story.append(Paragraph("5. HISTÓRICO DE TRAMITAÇÃO", styles["Subtitulo"]))
+
+    header_style = ParagraphStyle(
+        name="TableHeader",
+        parent=styles["Normal"],
+        fontSize=9,
+        fontName="Helvetica-Bold",
+        alignment=TA_CENTER,
+    )
+    cell_style = ParagraphStyle(
+        name="TableCell",
+        parent=styles["Normal"],
+        fontSize=9,
+        leading=12,
+    )
+
+    tramitacao_data = [
+        [
+            Paragraph("Etapa", header_style),
+            Paragraph("Data / Hora", header_style),
+            Paragraph("Responsável", header_style),
+        ]
+    ]
+
+    def fmt_dt(dt):
+        return dt.strftime("%d/%m/%Y às %H:%M") if dt else "—"
+
+    def fmt_user(user_obj):
+        return user_obj.nome_completo if user_obj else "—"
+
+    tramitacao_data.append([
+        Paragraph("Cadastro", cell_style),
+        Paragraph(fmt_dt(ocorrencia.created_at), cell_style),
+        Paragraph(fmt_user(ocorrencia.created_by), cell_style),
+    ])
+
+    if ocorrencia.data_laudo_entregue:
+        tramitacao_data.append([
+            Paragraph("Laudo Entregue", cell_style),
+            Paragraph(fmt_dt(ocorrencia.data_laudo_entregue), cell_style),
+            Paragraph(fmt_user(ocorrencia.laudo_entregue_por), cell_style),
+        ])
+
+    if ocorrencia.data_reabertura:
+        tramitacao_data.append([
+            Paragraph("Reabertura", cell_style),
+            Paragraph(fmt_dt(ocorrencia.data_reabertura), cell_style),
+            Paragraph(fmt_user(ocorrencia.reaberta_por), cell_style),
+        ])
+
+    if ocorrencia.data_finalizacao:
+        tramitacao_data.append([
+            Paragraph("Finalização", cell_style),
+            Paragraph(fmt_dt(ocorrencia.data_finalizacao), cell_style),
+            Paragraph(fmt_user(ocorrencia.finalizada_por), cell_style),
+        ])
+
+    # Cálculo de prazos no rodapé da tabela
+    if ocorrencia.data_laudo_entregue:
+        dias_perito = (ocorrencia.data_laudo_entregue.date() - ocorrencia.created_at.date()).days
+        prazo_perito_txt = f"Prazo do Perito: {dias_perito} dia(s)"
+        if ocorrencia.data_finalizacao:
+            dias_admin = (ocorrencia.data_finalizacao.date() - ocorrencia.data_laudo_entregue.date()).days
+            prazo_admin_txt = f"Prazo do Administrativo: {dias_admin} dia(s)"
+        else:
+            from django.utils import timezone as tz
+            dias_admin = (tz.now().date() - ocorrencia.data_laudo_entregue.date()).days
+            prazo_admin_txt = f"Aguardando Admin há: {dias_admin} dia(s)"
+        tramitacao_data.append([
+            Paragraph(f"{prazo_perito_txt} | {prazo_admin_txt}", ParagraphStyle(
+                name="PrazoCell", parent=styles["Normal"], fontSize=8,
+                fontName="Helvetica-Oblique", textColor=colors.HexColor("#555555"),
+            )),
+            Paragraph("", cell_style),
+            Paragraph("", cell_style),
+        ])
+
+    col_widths = [5 * cm, 5 * cm, 7 * cm]
+    tramitacao_table = Table(tramitacao_data, colWidths=col_widths)
+    tramitacao_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8f9fa")]),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("SPAN", (0, -1), (-1, -1)) if ocorrencia.data_laudo_entregue else ("TOPPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(tramitacao_table)
+    story.append(Spacer(1, 0.3 * cm))
+
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
 
     buffer.seek(0)

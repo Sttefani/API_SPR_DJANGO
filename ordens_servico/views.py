@@ -398,6 +398,22 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         validated_data.pop("email", None)
         validated_data.pop("password", None)
 
+        # Bloqueia reiteração de OS em AGUARDANDO_CIENCIA se prazo ainda não foi excedido
+        if os_anterior.status == "AGUARDANDO_CIENCIA":
+            dias_decorridos = (timezone.now().date() - os_anterior.created_at.date()).days
+            if dias_decorridos <= os_anterior.prazo_dias:
+                return Response(
+                    {
+                        "error": (
+                            f"O perito ainda não deu ciência desta OS e o prazo de "
+                            f"{os_anterior.prazo_dias} dia(s) ainda não foi excedido "
+                            f"({dias_decorridos} dia(s) decorridos). Aguarde o prazo "
+                            f"vencer ou oriente o perito a tomar ciência."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         # Captura ValidationError para retornar mensagem amigável (mantendo lógica original)
         try:
             # Busca objeto User para 'ordenada_por'

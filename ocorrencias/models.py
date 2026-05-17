@@ -64,6 +64,7 @@ class Ocorrencia(AuditModel):
     class Status(models.TextChoices):
         AGUARDANDO_PERITO = "AGUARDANDO_PERITO", "Aguardando Atribuição de Perito"
         EM_ANALISE = "EM_ANALISE", "Em Análise"
+        LAUDO_ENTREGUE = "LAUDO_ENTREGUE", "Laudo Entregue"
         FINALIZADA = "FINALIZADA", "Finalizada"
 
     numero_ocorrencia = models.CharField(
@@ -149,6 +150,17 @@ class Ocorrencia(AuditModel):
     data_finalizacao = models.DateTimeField(
         null=True, blank=True, verbose_name="Data de Finalização"
     )
+    data_laudo_entregue = models.DateTimeField(
+        null=True, blank=True, verbose_name="Data de Entrega do Laudo"
+    )
+    laudo_entregue_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="ocorrencias_laudo_entregue",
+        null=True,
+        blank=True,
+        verbose_name="Laudo entregue por",
+    )
 
     # =========================================================================
     # CAMPO DE EXAMES RECRIADO (AGORA COM THROUGH E QUANTIDADE)
@@ -209,6 +221,58 @@ class Ocorrencia(AuditModel):
     def pode_ser_editada(self):
         return not self.esta_finalizada
 
+    def entregar_laudo(self, user, ip_address):
+        """Marca o laudo como entregue pelo perito."""
+        from django.core.exceptions import ValidationError
+
+        if self.esta_finalizada:
+            raise ValidationError("Esta ocorrência já está finalizada.")
+        if not self.perito_atribuido:
+            raise ValidationError(
+                "Não é possível entregar laudo sem perito atribuído."
+            )
+        if self.status != self.Status.EM_ANALISE:
+            raise ValidationError(
+                f"Apenas ocorrências 'Em Análise' podem ter laudo entregue. "
+                f"Status atual: {self.get_status_display()}."
+            )
+        if not user or not user.is_authenticated:
+            raise ValidationError("Usuário inválido.")
+        if not (user.is_superuser or user.id == self.perito_atribuido.id):
+            raise ValidationError(
+                f"Apenas o perito atribuído ou um Super Administrador pode registrar a entrega do laudo."
+            )
+        if not ip_address:
+            ip_address = "127.0.0.1"
+
+        self.status = self.Status.LAUDO_ENTREGUE
+        self.data_laudo_entregue = timezone.now()
+        self.laudo_entregue_por = user
+        self.save()
+
+    def reverter_para_analise(self, user, ip_address):
+        """Reverte o status de LAUDO_ENTREGUE para EM_ANALISE."""
+        from django.core.exceptions import ValidationError
+
+        if self.status != self.Status.LAUDO_ENTREGUE:
+            raise ValidationError(
+                f"Apenas ocorrências com status 'Laudo Entregue' podem ser revertidas. "
+                f"Status atual: {self.get_status_display()}."
+            )
+        if not user or not user.is_authenticated:
+            raise ValidationError("Usuário inválido.")
+        if not (user.is_superuser or user.perfil in ["ADMINISTRATIVO", "SUPER_ADMIN"]):
+            raise ValidationError(
+                "Apenas usuários ADMINISTRATIVO ou SUPER_ADMIN podem reverter o laudo."
+            )
+        if not ip_address:
+            ip_address = "127.0.0.1"
+
+        self.status = self.Status.EM_ANALISE
+        self.data_laudo_entregue = None
+        self.laudo_entregue_por = None
+        self.save()
+
     def finalizar_com_assinatura(self, user, ip_address):
         """Finaliza a ocorrência com assinatura digital."""
         from django.core.exceptions import ValidationError
@@ -223,9 +287,9 @@ class Ocorrencia(AuditModel):
                 "Não é possível finalizar uma ocorrência sem perito atribuído. "
                 "Atribua um perito responsável primeiro."
             )
-        if self.status != self.Status.EM_ANALISE:
+        if self.status not in (self.Status.EM_ANALISE, self.Status.LAUDO_ENTREGUE):
             raise ValidationError(
-                f"Apenas ocorrências com status 'Em Análise' podem ser finalizadas. "
+                f"Apenas ocorrências 'Em Análise' ou 'Laudo Entregue' podem ser finalizadas. "
                 f"Status atual: {self.get_status_display()}."
             )
         if not user or not user.is_authenticated:
@@ -336,7 +400,9 @@ class Ocorrencia(AuditModel):
             except Ocorrencia.DoesNotExist:
                 pass
 
-        if self.status != self.Status.FINALIZADA:
+        # Statuses controlados manualmente — não sobrescrever automaticamente
+        _status_protegidos = (self.Status.FINALIZADA, self.Status.LAUDO_ENTREGUE)
+        if self.status not in _status_protegidos:
             if self.perito_atribuido:
                 self.status = self.Status.EM_ANALISE
             else:

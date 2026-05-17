@@ -156,18 +156,38 @@ class OcorrenciaListSerializer(serializers.ModelSerializer):
     def get_status_prazo(self, obj):
         if obj.data_finalizacao:
             return "CONCLUIDO"
+        # Quando laudo já foi entregue, o prazo do perito encerrou
+        if obj.status == "LAUDO_ENTREGUE":
+            return "AGUARDANDO_ADMIN"
         dias_corridos = (timezone.now().date() - obj.created_at.date()).days
         if dias_corridos <= 10:
             return "NO_PRAZO"
-        elif dias_corridos <= 20:
+        elif dias_corridos <= 17:
             return "PRORROGADO"
+        elif dias_corridos <= 20:
+            return "IMINENTE"
         else:
             return "ATRASADO"
 
     def get_dias_prazo(self, obj):
         if obj.data_finalizacao:
             dias_totais = (obj.data_finalizacao.date() - obj.created_at.date()).days
+            # Calcula prazo do admin se laudo foi entregue
+            if obj.data_laudo_entregue:
+                dias_perito = (obj.data_laudo_entregue.date() - obj.created_at.date()).days
+                dias_admin = (obj.data_finalizacao.date() - obj.data_laudo_entregue.date()).days
+                return (
+                    f"Total: {dias_totais} dias "
+                    f"(Perito: {dias_perito}d | Admin: {dias_admin}d)"
+                )
             return f"Concluído em {dias_totais} dias"
+        # Laudo entregue: mostra prazo do perito + tempo aguardando admin
+        if obj.data_laudo_entregue:
+            dias_perito = (obj.data_laudo_entregue.date() - obj.created_at.date()).days
+            dias_aguardando = (timezone.now().date() - obj.data_laudo_entregue.date()).days
+            return (
+                f"Perito: {dias_perito}d | Aguardando Admin: {dias_aguardando}d"
+            )
         dias_corridos = (timezone.now().date() - obj.created_at.date()).days
         return f"{dias_corridos} dias corridos"
 
@@ -202,6 +222,7 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
 
     finalizada_por = UserNestedSerializer(read_only=True)
     reaberta_por = UserNestedSerializer(read_only=True)
+    laudo_entregue_por = UserNestedSerializer(read_only=True)
 
     class Meta:
         model = Ocorrencia
@@ -222,6 +243,7 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
             "updated_by",
             "finalizada_por",
             "reaberta_por",
+            "laudo_entregue_por",
             "data_fato",
             "hora_fato",
             "historico",
@@ -235,6 +257,7 @@ class OcorrenciaDetailSerializer(serializers.ModelSerializer):
             "data_reabertura",
             "motivo_reabertura",
             "ip_reabertura",
+            "data_laudo_entregue",
             "created_at",
             "updated_at",
             "endereco",
@@ -506,6 +529,24 @@ class FinalizarComAssinaturaSerializer(serializers.Serializer):
         style={"input_type": "password"},
         label="Senha",
         help_text=("Confirme sua senha para assinatura digital"),
+    )
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = request.user
+        if not user.check_password(attrs.get("password")):
+            raise serializers.ValidationError({"password": "Senha incorreta."})
+        return attrs
+
+
+class EntregarLaudoSerializer(serializers.Serializer):
+    """Confirmação de senha para registrar entrega do laudo."""
+
+    password = serializers.CharField(
+        write_only=True,
+        style={"input_type": "password"},
+        label="Senha",
+        help_text="Confirme sua senha para registrar a entrega do laudo",
     )
 
     def validate(self, attrs):
