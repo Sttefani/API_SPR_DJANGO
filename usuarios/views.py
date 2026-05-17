@@ -165,9 +165,15 @@ class UserManagementViewSet(
     @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
     def peritos_dropdown(self, request):
         """Lista simplificada de peritos para dropdowns"""
+        servico_id = request.query_params.get("servico_pericial_id")
         peritos = User.objects.filter(
             perfil="PERITO", deleted_at__isnull=True
-        ).order_by("nome_completo")
+        )
+        if servico_id:
+            peritos = peritos.filter(
+                servicos_periciais__id=servico_id
+            )
+        peritos = peritos.order_by("nome_completo").distinct()
 
         data = [
             {"id": perito.id, "nome_completo": perito.nome_completo}
