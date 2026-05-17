@@ -1,6 +1,9 @@
 # usuarios/views.py
 
+import logging
 from rest_framework import viewsets, mixins, status
+
+logger = logging.getLogger(__name__)
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -48,39 +51,19 @@ class UserManagementViewSet(
     filterset_fields = ["nome_completo", "email", "cpf", "status", "perfil"]
 
     def update(self, request, *args, **kwargs):
-        """Override para debug"""
-        print("=" * 80)
-        print(f"🔍 DADOS RECEBIDOS: {request.data}")
-        print("=" * 80)
-
+        logger.debug("Usuário update — dados recebidos: %s", request.data)
         try:
-            response = super().update(request, *args, **kwargs)
-            print("✅ Sucesso!")
-            return response
-        except Exception as e:
-            print(f"❌ ERRO: {type(e).__name__}")
-            print(f"❌ MENSAGEM: {str(e)}")
-            import traceback
-
-            traceback.print_exc()
+            return super().update(request, *args, **kwargs)
+        except Exception:
+            logger.exception("Erro ao atualizar usuário")
             raise
 
     def partial_update(self, request, *args, **kwargs):
-        """Override para debug"""
-        print("=" * 80)
-        print(f"🔍 PARTIAL UPDATE - DADOS: {request.data}")
-        print("=" * 80)
-
+        logger.debug("Usuário partial_update — dados recebidos: %s", request.data)
         try:
-            response = super().partial_update(request, *args, **kwargs)
-            print("✅ Sucesso!")
-            return response
-        except Exception as e:
-            print(f"❌ ERRO: {type(e).__name__}")
-            print(f"❌ MENSAGEM: {str(e)}")
-            import traceback
-
-            traceback.print_exc()
+            return super().partial_update(request, *args, **kwargs)
+        except Exception:
+            logger.exception("Erro ao atualizar parcialmente usuário")
             raise
 
     def perform_update(self, serializer):

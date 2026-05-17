@@ -1,9 +1,12 @@
 # ordens_servico/views.py
 
+import logging
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 # Imports necessários (verificados e completos)
 from django.db.models import (
@@ -204,8 +207,7 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         try:
             ordem_servico = serializer.save()
         except Exception as e:
-            # Logar erro e retornar 500
-            print(f"Erro no serializer.save() ao criar OS: {e}")
+            logger.exception("Erro no serializer.save() ao criar OS")
             return Response(
                 {"error": "Erro interno ao salvar a Ordem de Serviço."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -358,7 +360,7 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             ordem_servico.tomar_ciencia(user=request.user, ip_address=ip_address)
         except Exception as e:
             # Log e erro genérico
-            print(f"Erro ao chamar ordem_servico.tomar_ciencia: {e}")
+            logger.exception("Erro ao chamar ordem_servico.tomar_ciencia")
             return Response(
                 {"error": "Erro interno ao registrar ciência."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -446,7 +448,7 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             )
         except Exception as e:
             # Log e erro genérico
-            print(f"Erro inesperado ao reiterar OS: {e}")
+            logger.exception("Erro inesperado ao reiterar OS")
             return Response(
                 {"error": "Erro interno ao criar reiteração."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -512,7 +514,7 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         try:
             ordem_servico.iniciar_trabalho(user=request.user)
         except Exception as e:
-            print(f"Erro ao chamar ordem_servico.iniciar_trabalho: {e}")
+            logger.exception("Erro ao chamar ordem_servico.iniciar_trabalho")
             return Response(
                 {"error": "Erro interno ao iniciar trabalho."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -578,7 +580,7 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
                 user=request.user,
             )
         except Exception as e:
-            print(f"Erro ao chamar ordem_servico.justificar_atraso: {e}")
+            logger.exception("Erro ao chamar ordem_servico.justificar_atraso")
             return Response(
                 {"error": "Erro interno ao salvar justificativa."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -667,7 +669,7 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
         try:
             ordem_servico.concluir(user=request.user)
         except Exception as e:
-            print(f"Erro ao chamar ordem_servico.concluir: {e}")
+            logger.exception("Erro ao chamar ordem_servico.concluir")
             return Response(
                 {"error": "Erro interno ao concluir a OS."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1091,7 +1093,7 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
                 dados, filtros_aplicados, usuario_emissor
             )
         except Exception as e:
-            print(f"Erro PDF: {e}")
+            logger.exception("Erro ao gerar PDF de relatórios gerenciais")
             return Response(
                 {"error": "Erro interno ao gerar PDF."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,

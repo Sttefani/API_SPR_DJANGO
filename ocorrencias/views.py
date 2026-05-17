@@ -1,5 +1,8 @@
 import csv
+import logging
 from rest_framework import viewsets, status
+
+logger = logging.getLogger(__name__)
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.http import HttpResponse
@@ -1108,8 +1111,7 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
             return response
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.exception("Erro ao gerar exportação CSV de ocorrências")
             return Response(
                 {"error": f"Erro ao gerar exportacao: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,

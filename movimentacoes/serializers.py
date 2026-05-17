@@ -61,25 +61,14 @@ class CriarMovimentacaoSerializer(serializers.Serializer):
         username_input = attrs.get("username")
         password = attrs.get("password")
 
-        print(f"🔍 DEBUG - Validando movimentação")
-        print(f"👤 Usuário logado: {user.nome_completo} (ID: {user.id})")
-
         # ====== VALIDAÇÃO DE PERMISSÃO DE EDIÇÃO ======
         movimentacao = self.context.get("movimentacao")
-        print(f"📝 Movimentação no contexto: {movimentacao}")
 
         if movimentacao:  # Se está editando
-            print(f"✏️ MODO EDIÇÃO DETECTADO!")
-            print(
-                f"👤 Criado por: {movimentacao.created_by.nome_completo if movimentacao.created_by else 'Ninguém'} (ID: {movimentacao.created_by.id if movimentacao.created_by else 'N/A'})"
-            )
-            print(f"🔐 É super admin? {user.is_superuser}")
-
             # Super Admin pode editar qualquer movimentação
             if not user.is_superuser:
                 # Outros usuários só podem editar suas próprias movimentações
                 if movimentacao.created_by and movimentacao.created_by.id != user.id:
-                    print(f"❌ BLOQUEANDO EDIÇÃO!")
                     raise serializers.ValidationError(
                         {
                             "non_field_errors": [
@@ -88,17 +77,10 @@ class CriarMovimentacaoSerializer(serializers.Serializer):
                             ]
                         }
                     )
-                else:
-                    print(f"✅ Permitindo edição (é o autor)")
-            else:
-                print(f"✅ Permitindo edição (é super admin)")
-        else:
-            print(f"➕ MODO CRIAÇÃO - sem validação de autor")
         # =============================================
 
         # Valida o email
         if username_input != user.email:
-            print(f"❌ Email incorreto!")
             raise serializers.ValidationError(
                 {
                     "username": "O email de confirmação deve ser o mesmo do seu email de login."
@@ -110,10 +92,8 @@ class CriarMovimentacaoSerializer(serializers.Serializer):
             request=request, email=username_input, password=password
         )
         if not authenticated_user or authenticated_user.id != user.id:
-            print(f"❌ Senha incorreta!")
             raise serializers.ValidationError({"password": "Senha incorreta."})
 
-        print(f"✅ Validação completa - PASSOU!")
         return attrs
 
     def create(self, validated_data):
