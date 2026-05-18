@@ -1,14 +1,14 @@
 # ocorrencias/filters.py
 import django_filters
 from django import forms
-from django.db.models import Q, F, ExpressionWrapper, DateField
-from django.db.models.functions import Cast, TruncDate
+from django.db.models import Q
 from django.utils import timezone
 from datetime import timedelta
 from .models import Ocorrencia
 
 class CharInFilter(django_filters.BaseInFilter, django_filters.CharFilter):
     pass
+
 
 class OcorrenciaFilter(django_filters.FilterSet):
     
@@ -150,6 +150,11 @@ class OcorrenciaFilter(django_filters.FilterSet):
         method='filter_busca_geral',
         label='Busca Geral'
     )
+
+    classificacao = django_filters.CharFilter(
+        method='filter_classificacao',
+        label='Classificação (inclui subgrupos)'
+    )
     
     # ===== ORDENAÇÃO =====
     ordering = django_filters.OrderingFilter(
@@ -174,7 +179,7 @@ class OcorrenciaFilter(django_filters.FilterSet):
         fields = [
             'numero_ocorrencia', 'status', 'status__in', 'servico_pericial', 'cidade',
             'unidade_demandante', 'autoridade', 'perito_atribuido',
-            'classificacao', 'procedimento_cadastrado'
+            'procedimento_cadastrado'
         ]
 
     # ===== MÉTODOS PERSONALIZADOS =====
@@ -252,7 +257,7 @@ class OcorrenciaFilter(django_filters.FilterSet):
         """
         if not value:
             return queryset
-        
+
         return queryset.filter(
             Q(numero_ocorrencia__icontains=value) |
             Q(historico__icontains=value) |
@@ -264,3 +269,16 @@ class OcorrenciaFilter(django_filters.FilterSet):
             Q(servico_pericial__nome__icontains=value) |
             Q(cidade__nome__icontains=value)
         ).distinct()
+
+    def filter_classificacao(self, queryset, name, value):
+        if not value or value.strip().lower() == 'null':
+            return queryset
+        try:
+            from classificacoes.models import ClassificacaoOcorrencia
+            pai_pk = int(value)
+            filhos_pks = list(
+                ClassificacaoOcorrencia.objects.filter(parent_id=pai_pk).values_list('pk', flat=True)
+            )
+            return queryset.filter(classificacao_id__in=[pai_pk] + filhos_pks)
+        except (ValueError, TypeError):
+            return queryset
