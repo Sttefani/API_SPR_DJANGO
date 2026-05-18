@@ -55,7 +55,9 @@ class OrdemServicoSerializer(serializers.ModelSerializer):
             "prazo_dias",
             "status",
             "data_conclusao",
-            "data_prazo",  # ✅ CAMPO NOVO ADICIONADO
+            "data_prazo",
+            "data_prazo_efetivo",
+            "dias_desconto_admin",
             "texto_padrao",
             "observacoes_administrativo",
             "justificativa_atraso",

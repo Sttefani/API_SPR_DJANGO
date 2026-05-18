@@ -162,6 +162,20 @@ class OrdemServico(AuditModel):
         help_text="Usuário que deu baixa/concluiu esta OS",
     )
 
+    # --- DESCONTO ADMINISTRATIVO ---
+    dias_desconto_admin = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Dias de Desconto Administrativo",
+        help_text="Dias entre a entrega do laudo pelo perito e a finalização pelo administrativo. Descontados do prazo para fins de métricas.",
+    )
+
+    data_prazo_efetivo = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Data Limite Efetiva",
+        help_text="Data limite corrigida: data_prazo + dias_desconto_admin. Usada nas métricas de desempenho.",
+    )
+
     # ========================================
     # PROPRIEDADES CALCULADAS
     # ========================================
@@ -247,15 +261,18 @@ class OrdemServico(AuditModel):
     @property
     def concluida_com_atraso(self):
         """
-        Verifica se a OS foi concluída após o prazo de vencimento.
+        Verifica se a OS foi concluída após o prazo efetivo.
+        Usa data_prazo_efetivo (que desconta o atraso administrativo) quando disponível,
+        senão cai de volta para data_prazo original.
         """
         if self.status != self.Status.CONCLUIDA or not self.data_conclusao:
             return None
 
-        if not self.data_vencimento:
+        prazo_date = self.data_prazo_efetivo or self.data_prazo
+        if not prazo_date:
             return None
 
-        return self.data_conclusao > self.data_vencimento
+        return self.data_conclusao.date() > prazo_date
 
     @property
     def percentual_prazo_consumido(self):
@@ -427,12 +444,28 @@ class OrdemServico(AuditModel):
         """
         data_conclusao = timezone.now()
 
+        # Calcula o desconto administrativo:
+        # dias entre entrega do laudo pelo perito e finalização pelo administrativo.
+        dias_desconto = 0
+        ocorrencia = self.ocorrencia
+        if ocorrencia.data_laudo_entregue and ocorrencia.data_finalizacao:
+            delta = (
+                ocorrencia.data_finalizacao.date() - ocorrencia.data_laudo_entregue.date()
+            ).days
+            dias_desconto = max(0, delta)
+
+        data_prazo_efetivo = (
+            self.data_prazo + timedelta(days=dias_desconto) if self.data_prazo else None
+        )
+
         # Conclui a OS atual
         self.status = self.Status.CONCLUIDA
         self.data_conclusao = data_conclusao
         self.concluida_por = user
+        self.dias_desconto_admin = dias_desconto
+        self.data_prazo_efetivo = data_prazo_efetivo
         self.updated_by = user
-        self.save()  # Salva a si mesma
+        self.save()
 
         # Determina a OS original
         os_original = self if self.numero_reiteracao == 0 else self.os_original
@@ -449,6 +482,8 @@ class OrdemServico(AuditModel):
                 status=self.Status.CONCLUIDA,
                 data_conclusao=data_conclusao,
                 concluida_por=user,
+                dias_desconto_admin=dias_desconto,
+                data_prazo_efetivo=data_prazo_efetivo,
                 updated_by=user,
                 updated_at=timezone.now(),
             )

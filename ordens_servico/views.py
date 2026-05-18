@@ -19,7 +19,7 @@ from django.db.models import (
     Sum,
     DateField,
 )  # ✅ DateField adicionado/confirmado
-from django.db.models.functions import TruncDate
+from django.db.models.functions import TruncDate, Coalesce
 from datetime import timedelta
 from django.core.exceptions import ValidationError  # Para try/except em reiterar
 
@@ -857,7 +857,9 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"], url_path="relatorios-gerenciais")
     def relatorios_gerenciais(self, request):
         """Retorna relatórios gerenciais agregados sobre Ordens de Serviço."""
-        queryset_filtrado = self.filter_queryset(self.get_queryset())
+        queryset_filtrado = self.filter_queryset(self.get_queryset()).annotate(
+            prazo_final=Coalesce("data_prazo_efetivo", "data_prazo")
+        )
         data_atual = timezone.now().date()
 
         # 1. RESUMO GERAL
@@ -891,13 +893,13 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
                 cumpridas_no_prazo=Count(
                     "id",
                     filter=Q(
-                        status="CONCLUIDA", data_conclusao__date__lte=F("data_prazo")
+                        status="CONCLUIDA", data_conclusao__date__lte=F("prazo_final")
                     ),
                 ),
                 cumpridas_com_atraso=Count(
                     "id",
                     filter=Q(
-                        status="CONCLUIDA", data_conclusao__date__gt=F("data_prazo")
+                        status="CONCLUIDA", data_conclusao__date__gt=F("prazo_final")
                     ),
                 ),
             )
@@ -972,11 +974,11 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
             total_concluidas=Count("id", filter=Q(status="CONCLUIDA")),
             cumpridas_no_prazo=Count(
                 "id",
-                filter=Q(status="CONCLUIDA", data_conclusao__date__lte=F("data_prazo")),
+                filter=Q(status="CONCLUIDA", data_conclusao__date__lte=F("prazo_final")),
             ),
             cumpridas_com_atraso=Count(
                 "id",
-                filter=Q(status="CONCLUIDA", data_conclusao__date__gt=F("data_prazo")),
+                filter=Q(status="CONCLUIDA", data_conclusao__date__gt=F("prazo_final")),
             ),
         )
         tc_geral = taxa_aggr["total_concluidas"]
