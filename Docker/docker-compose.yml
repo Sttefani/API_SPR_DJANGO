@@ -33,9 +33,17 @@ services:
       retries: 5
 
   web:
-    build: ..
+    image: spr-criminalistica:1.0
     container_name: spr_criminalistica_web
-    command: gunicorn spr.wsgi:application --bind 0.0.0.0:8000 
+    command: >
+      sh -c "gunicorn spr.wsgi:application \
+      --bind 0.0.0.0:8000 \
+      --workers 20 \
+      --timeout 120 \
+      --max-requests 500 \
+      --max-requests-jitter 100
+      || echo 'Gunicorn falhou, mantendo container ativo'
+      && tail -f /dev/null"
     volumes:
       - media_volume:/app/media
     ports:
@@ -50,7 +58,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 64G
+          memory: 20G
     networks:
       - spr_network
 
