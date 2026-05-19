@@ -7,8 +7,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.http import HttpResponse
 from django.utils import timezone
-from django.db.models import Q, Count, F, Case, When, Sum
-from django.db.models.functions import Coalesce
+from django.db.models import Q, Count, F, Case, When, Sum, DateField
+from django.db.models.functions import Coalesce, TruncDate
 from datetime import timedelta, datetime
 from exames.models import Exame
 from ocorrencias.endereco_models import EnderecoOcorrencia
@@ -1242,6 +1242,22 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 "id", "numero_ocorrencia", "status", "created_at"
             )
 
+        # Evolução mensal — todos os dados agrupados por mês (frontend fatia os últimos 6)
+        evolucao_mensal_qs = (
+            queryset_base
+            .annotate(mes=TruncDate("created_at", kind="month", output_field=DateField()))
+            .values("mes")
+            .annotate(
+                total=Count("id"),
+                finalizadas=Count("id", filter=Q(status="FINALIZADA")),
+            )
+            .order_by("mes")
+        )
+        evolucao_mensal = [
+            {"mes": item["mes"].isoformat(), "total": item["total"], "finalizadas": item["finalizadas"]}
+            for item in evolucao_mensal_qs
+        ]
+
         response_data = {
             "geral": {
                 "total": total,
@@ -1257,8 +1273,9 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
                 "criadas": criadas_30dias,
                 "finalizadas": finalizadas_30dias,
             },
+            "evolucao_mensal": evolucao_mensal,
             "por_servico": por_servico,
-            "por_exame": por_exame,  # <--- Agora enviando a árvore certinha!
+            "por_exame": por_exame,
         }
 
         if user.perfil == "PERITO":
