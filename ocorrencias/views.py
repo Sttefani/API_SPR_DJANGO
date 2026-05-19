@@ -612,7 +612,32 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         ip_address = request.META.get("REMOTE_ADDR", "127.0.0.1")
+        
+        # Aqui o sistema atualiza a OCORRÊNCIA
         ocorrencia.entregar_laudo(request.user, ip_address)
+
+        # ====================================================================
+        # 👇 INÍCIO DA CORREÇÃO: AVISANDO A ORDEM DE SERVIÇO 👇
+        # ====================================================================
+        try:
+            from ordens_servico.models import OrdemServico
+            import logging
+
+            # Pega as Ordens de Serviço dessa ocorrência que ainda não foram concluídas
+            ordens_pendentes = ocorrencia.ordens_servico.exclude(
+                status=OrdemServico.Status.CONCLUIDA
+            ).filter(deleted_at__isnull=True)
+
+            # Para cada OS que estiver rodando, chama a função concluir() do próprio sistema
+            for os in ordens_pendentes:
+                os.concluir(user=request.user)
+
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"Erro ao concluir OS ao entregar laudo: {str(e)}")
+        # ====================================================================
+        # 👆 FIM DA CORREÇÃO 👆
+        # ====================================================================
 
         response_serializer = OcorrenciaDetailSerializer(ocorrencia, context={"request": request})
         return Response(
