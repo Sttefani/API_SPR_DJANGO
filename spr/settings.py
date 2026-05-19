@@ -7,8 +7,8 @@
 from datetime import timedelta
 from pathlib import Path
 import dj_database_url
-import environ  
-import os       
+import environ
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -31,11 +31,13 @@ DEBUG = env('DEBUG')
 
 #'ALLOWED_HOSTS' VEM DO DOCKER-COMPOSE
 ALLOWED_HOSTS = [
-    'localhost', 
+    'localhost',
     '127.0.0.1',
-    '192.168.12.30', 
+    '192.168.12.30',
     '192.168.12.33',
-    '192.168.0.35' 
+    '192.168.0.35',
+    '192.168.12.10'
+
 ]
 
 INSTALLED_APPS = [
@@ -46,14 +48,14 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'rest_framework',  
-    'rest_framework_simplejwt',  
+    'rest_framework',
+    'rest_framework_simplejwt',
     'django_filters',
     'django_extensions',
     'usuarios',
-    'servicos_periciais',  
+    'servicos_periciais',
     'cidades',
-    'cargos',      
+    'cargos',
     'autoridades',
     'unidades_demandantes',
     'procedimentos',
@@ -71,7 +73,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware', 
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -100,6 +102,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'spr.wsgi.application'
 
+SESSION_ENGINE = "django.contrib.sessions.backends.db"
 
 # Database
 
@@ -170,7 +173,9 @@ CORS_ALLOWED_ORIGINS = [
     "http://192.168.12.33:4200",
     "http://192.168.0.35:4200",
     "http://192.168.0.35",
-    
+    "http://192.168.12.10:4200",
+    "http://192.168.12.10",
+
 ]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -184,6 +189,8 @@ CSRF_TRUSTED_ORIGINS = [
     "http://192.168.12.33:4200",
     "http://192.168.0.35:4200",
     "http://192.168.0.35",
+    "http://192.168.12.10:4200",
+    "http://192.168.12.10",
 ]
 
 SIMPLE_JWT = {
