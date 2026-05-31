@@ -20,3 +20,21 @@ class PodeVerCustodia(BasePermission):
     """Leitura: qualquer usuário autenticado e ativo."""
     def has_permission(self, request, view):
         return request.user.is_authenticated
+
+
+class IsExternoUser(BasePermission):
+    """Dashboard exclusivo do perfil EXTERNO."""
+    def has_permission(self, request, view):
+        return (
+            request.user.is_authenticated
+            and request.user.perfil == User.Perfil.EXTERNO
+        )
+
+
+class IsCustodianteUser(BasePermission):
+    """Dashboard exclusivo do perfil CUSTODIANTE."""
+    def has_permission(self, request, view):
+        return (
+            request.user.is_authenticated
+            and request.user.perfil == User.Perfil.CUSTODIANTE
+        )

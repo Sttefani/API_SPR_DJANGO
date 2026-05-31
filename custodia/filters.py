@@ -8,6 +8,10 @@ class VestigioFilter(django_filters.FilterSet):
     status = django_filters.CharFilter(lookup_expr='exact')
     servico_pericial = django_filters.NumberFilter(field_name='servico_pericial__id')
     unidade_demandante = django_filters.NumberFilter(field_name='unidade_demandante__id')
+    
+    # 💎 ADICIONADO: Permite que o Angular filtre vestígios por perito responsável
+    user_destino = django_filters.NumberFilter(field_name='user_destino__id')
+    
     biologico = django_filters.BooleanFilter()
     conformidade = django_filters.BooleanFilter()
     saiu_da_custodia = django_filters.BooleanFilter()
@@ -19,7 +23,7 @@ class VestigioFilter(django_filters.FilterSet):
     class Meta:
         model = Vestigio
         fields = [
-            'status', 'servico_pericial', 'unidade_demandante',
+            'status', 'servico_pericial', 'unidade_demandante', 'user_destino', # 💎 INCLUÍDO AQUI
             'biologico', 'conformidade', 'saiu_da_custodia',
             'ano_ocorrencia', 'lacre', 'num_processo_sei', 'ocorrencia',
         ]

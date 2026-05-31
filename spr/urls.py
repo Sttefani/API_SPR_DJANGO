@@ -39,6 +39,9 @@ from custodia.views import (
     VestigioViewSet,
     VestigioMovimentacaoViewSet,
     DNAViewSet,
+    CustodiaResumoView,
+    DashboardExternoView,
+    DashboardCustodianteView,
 )
 
 # =============================================================================
@@ -109,6 +112,23 @@ urlpatterns = [
         DashboardCriminalView.as_view(),
         name="analise-dashboard",
     ),  # 🆕 NOVA LINHA
+    # Widget de resumo de custódia (perito, operacional, admin, super_admin)
+    path(
+        "api/custodia/resumo/",
+        CustodiaResumoView.as_view(),
+        name="custodia-resumo",
+    ),
+    # Dashboards por perfil — Custódia
+    path(
+        "api/custodia/dashboard/externo/",
+        DashboardExternoView.as_view(),
+        name="custodia-dashboard-externo",
+    ),
+    path(
+        "api/custodia/dashboard/custodiante/",
+        DashboardCustodianteView.as_view(),
+        name="custodia-dashboard-custodiante",
+    ),
     # Autenticação
     path("api-auth/", include("rest_framework.urls")),
     path("api/change-password/", ChangePasswordView.as_view(), name="change-password"),

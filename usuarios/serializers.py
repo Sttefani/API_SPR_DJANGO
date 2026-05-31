@@ -8,6 +8,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import User
 from servicos_periciais.models import ServicoPericial
+from unidades_demandantes.models import UnidadeDemandante
 
 User = get_user_model()
 
@@ -18,6 +19,12 @@ User = get_user_model()
 class ServicoPericialNestedSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServicoPericial
+        fields = ["id", "sigla", "nome"]
+
+
+class UnidadeDemandanteResumoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UnidadeDemandante
         fields = ["id", "sigla", "nome"]
 
 
@@ -74,6 +81,15 @@ class UserManagementSerializer(serializers.ModelSerializer):
         write_only=True,
         label="Serviços Periciais",
     )
+    unidade_demandante = UnidadeDemandanteResumoSerializer(read_only=True)
+    unidade_demandante_id = serializers.PrimaryKeyRelatedField(
+        queryset=UnidadeDemandante.objects.all(),
+        source="unidade_demandante",
+        required=False,
+        allow_null=True,
+        write_only=True,
+        label="Unidade Demandante",
+    )
 
     class Meta:
         model = User
@@ -89,6 +105,8 @@ class UserManagementSerializer(serializers.ModelSerializer):
             "deve_alterar_senha",
             "servicos_periciais",
             "servicos_periciais_ids",
+            "unidade_demandante",
+            "unidade_demandante_id",
             "created_at",
             "updated_at",
         ]
@@ -134,12 +152,19 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["perfil"] = user.perfil
         token["deve_alterar_senha"] = user.deve_alterar_senha
         token["is_superuser"] = user.is_superuser
-
-        # ← ADICIONAR: Serializar os serviços periciais
         token["servicos_periciais"] = [
             {"id": s.id, "sigla": s.sigla, "nome": s.nome}
             for s in user.servicos_periciais.all()
         ]
+        token["unidade_demandante"] = (
+            {
+                "id": user.unidade_demandante.id,
+                "sigla": user.unidade_demandante.sigla,
+                "nome": user.unidade_demandante.nome,
+            }
+            if user.unidade_demandante_id
+            else None
+        )
 
         return token
 
@@ -177,6 +202,15 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
                 {"id": s.id, "sigla": s.sigla, "nome": s.nome}
                 for s in self.user.servicos_periciais.all()
             ],
+            "unidade_demandante": (
+                {
+                    "id": self.user.unidade_demandante.id,
+                    "sigla": self.user.unidade_demandante.sigla,
+                    "nome": self.user.unidade_demandante.nome,
+                }
+                if self.user.unidade_demandante_id
+                else None
+            ),
         }
 
         return data
