@@ -66,8 +66,8 @@ INSTALLED_APPS = [
     'tipos_documento',
     'movimentacoes',
     'ordens_servico',
-    'IA',
     'auditlog',
+    'custodia',
 ]
 
 MIDDLEWARE = [
@@ -212,7 +212,6 @@ SIMPLE_JWT = {
     'USER_ID_CLAIM': 'user_id',
 }
 
-GROQ_API_KEY = env('GROQ_API_KEY')
 
 # Configuração de arquivos de mídia
 MEDIA_URL = '/media/'

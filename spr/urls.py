@@ -4,6 +4,8 @@
 
 from django.contrib import admin
 from django.urls import path, include
+from django.conf import settings
+from django.conf.urls.static import static
 from rest_framework_nested import routers
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -33,6 +35,11 @@ from procedimentos_cadastrados.views import ProcedimentoCadastradoViewSet
 from tipos_documento.views import TipoDocumentoViewSet
 from ocorrencias.views import EnderecoOcorrenciaViewSet, OcorrenciaViewSet
 from ocorrencias.views_relatorios import RelatoriosGerenciaisViewSet
+from custodia.views import (
+    VestigioViewSet,
+    VestigioMovimentacaoViewSet,
+    DNAViewSet,
+)
 
 # =============================================================================
 # ROTEADOR NÍVEL 1 (PRINCIPAL)
@@ -61,6 +68,9 @@ router.register(
 )
 router.register(r"registrar", UserRegistrationViewSet, basename="user-registration")
 router.register(r"ordens-servico", OrdemServicoViewSet, basename="ordens-servico")
+router.register(r"custodia/vestigios", VestigioViewSet, basename="vestigio")
+router.register(r"custodia/movimentacoes", VestigioMovimentacaoViewSet, basename="vestigio-movimentacao")
+router.register(r"custodia/dnas", DNAViewSet, basename="dna")
 
 # =============================================================================
 # ROTEADORES ANINHADOS
@@ -104,8 +114,11 @@ urlpatterns = [
     path("api/change-password/", ChangePasswordView.as_view(), name="change-password"),
     path("api/token/", MyTokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
-    # Inclui as rotas do app de Inteligência Artificial
-    path("api/ia/", include("IA.urls")),
     # Auditoria
     path("api/auditlog/", include("auditlog.urls")),
 ]
+
+# Servir arquivos de mídia (fotos de DNA, etc.).
+# Em produção (DEBUG=False) o ideal é o nginx/whitenoise servir /media/,
+# mas mantemos o fallback do Django para o ambiente atual funcionar.
+urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

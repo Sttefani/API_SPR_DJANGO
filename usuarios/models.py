@@ -104,6 +104,8 @@ class User(AbstractUser, AuditModel):
         ADMINISTRATIVO = "ADMINISTRATIVO", "Administrativo"
         OPERACIONAL = "OPERACIONAL", "Operacional"
         SUPER_ADMIN = "SUPER_ADMIN", "Super Admin"
+        CUSTODIANTE = "CUSTODIANTE", "Custodiante"
+        EXTERNO = "EXTERNO", "Externo"
 
     # Remove o campo 'username' padrão, pois usaremos o email
     username = None
@@ -128,6 +130,14 @@ class User(AbstractUser, AuditModel):
     )
     # CAMPO ADICIONADO PARA A FUNCIONALIDADE DE RESET DE SENHA
     deve_alterar_senha = models.BooleanField(default=False)
+
+    # Obrigatório para perfil EXTERNO — filtra vestígios por unidade no get_queryset()
+    unidade_demandante = models.ForeignKey(
+        'unidades_demandantes.UnidadeDemandante',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='usuarios',
+    )
 
     # Campo de relação (atrelamento) com os Serviços Periciais
     servicos_periciais = models.ManyToManyField(
