@@ -51,6 +51,15 @@ class Vestigio(AuditModel):
         blank=True,
         related_name='vestigios_custodia',
     )
+    # Vinculação com Ocorrências do módulo de análise criminal.
+    # Opcional: um vestígio pode existir sem ocorrência vinculada.
+    # M2M porque um vestígio pode aparecer em N ocorrências de serviços distintos.
+    ocorrencias_vinculadas = models.ManyToManyField(
+        'ocorrencias.Ocorrencia',
+        blank=True,
+        related_name='vestigios',
+        verbose_name='Ocorrências Vinculadas',
+    )
     vestigio_contra_prova = models.ForeignKey(
         'self',
         on_delete=models.SET_NULL,

@@ -7,6 +7,7 @@ from autoridades.models import Autoridade
 from unidades_demandantes.models import UnidadeDemandante
 from servicos_periciais.models import ServicoPericial
 from usuarios.models import User
+from ocorrencias.models import Ocorrencia
 
 
 # ---------------------------------------------------------------------------
@@ -20,6 +21,33 @@ class AutoridadeResumoSerializer(serializers.ModelSerializer):
         from autoridades.models import Autoridade
         model = Autoridade
         fields = ['id', 'nome', 'cargo_nome']
+
+
+class ProcedimentoResumoSerializer(serializers.ModelSerializer):
+    tipo_sigla = serializers.CharField(source='tipo_procedimento.sigla', read_only=True)
+    tipo_nome  = serializers.CharField(source='tipo_procedimento.nome',  read_only=True)
+    numero_completo = serializers.SerializerMethodField()
+
+    def get_numero_completo(self, obj):
+        return f"{obj.tipo_procedimento.sigla} {obj.numero}/{obj.ano}"
+
+    class Meta:
+        model = ProcedimentoCadastrado
+        fields = ['id', 'numero', 'ano', 'tipo_sigla', 'tipo_nome', 'numero_completo']
+
+
+class OcorrenciaResumoSerializer(serializers.ModelSerializer):
+    servico_sigla    = serializers.CharField(source='servico_pericial.sigla', read_only=True)
+    unidade_sigla    = serializers.CharField(source='unidade_demandante.sigla', read_only=True)
+    status_display   = serializers.CharField(source='get_status_display', read_only=True)
+    procedimento     = ProcedimentoResumoSerializer(source='procedimento_cadastrado', read_only=True)
+
+    class Meta:
+        model = Ocorrencia
+        fields = [
+            'id', 'numero_ocorrencia', 'status', 'status_display',
+            'servico_sigla', 'unidade_sigla', 'procedimento',
+        ]
 
 
 class UnidadeResumoSerializer(serializers.ModelSerializer):
@@ -84,12 +112,12 @@ class VestigioDetailSerializer(serializers.ModelSerializer):
     created_by         = UsuarioResumoSerializer(read_only=True)
     updated_by         = UsuarioResumoSerializer(read_only=True)
     procedimentos      = ProcedimentoCadastradoResumoSerializer(many=True, read_only=True)
+    ocorrencias_vinculadas = OcorrenciaResumoSerializer(many=True, read_only=True)
     vestigio_contra_prova_lacre = serializers.CharField(
         source='vestigio_contra_prova.lacre', read_only=True
     )
     status_display = serializers.CharField(source='get_status_display', read_only=True)
 
-    # Campo calculado para auditoria: prioriza created_by, cai para responsavel_nome (ETL)
     registrado_por = serializers.SerializerMethodField()
     atualizado_por = serializers.SerializerMethodField()
 
@@ -108,24 +136,27 @@ class VestigioDetailSerializer(serializers.ModelSerializer):
             'ocorrencia', 'ano_ocorrencia', 'status', 'status_display',
             'descricao', 'saiu_da_custodia',
             'unidade_demandante', 'servico_pericial', 'autoridade',
-            'user_destino', 'procedimentos', 'vestigio_contra_prova',
-            'vestigio_contra_prova_lacre', 'created_by', 'updated_by',
-            'registrado_por', 'atualizado_por',
+            'user_destino', 'procedimentos', 'ocorrencias_vinculadas',
+            'vestigio_contra_prova', 'vestigio_contra_prova_lacre',
+            'created_by', 'updated_by', 'registrado_por', 'atualizado_por',
             'created_at', 'updated_at',
         ]
 
 
 class VestigioCreateSerializer(serializers.ModelSerializer):
+    # Usamos all_objects (inclui soft-deleted) para replicar o comportamento do
+    # Java (findById ignora deleção lógica). Assim edições de vestígios que
+    # referenciam objetos arquivados não falham com "Pk inválido".
     unidade_demandante_id = serializers.PrimaryKeyRelatedField(
-        queryset=UnidadeDemandante.objects.all(),
+        queryset=UnidadeDemandante.all_objects.all(),
         source='unidade_demandante',
     )
     servico_pericial_id = serializers.PrimaryKeyRelatedField(
-        queryset=ServicoPericial.objects.all(),
+        queryset=ServicoPericial.all_objects.all(),
         source='servico_pericial',
     )
     autoridade_id = serializers.PrimaryKeyRelatedField(
-        queryset=Autoridade.objects.all(),
+        queryset=Autoridade.all_objects.all(),
         source='autoridade',
         required=False,
         allow_null=True,
@@ -137,14 +168,23 @@ class VestigioCreateSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
     vestigio_contra_prova_id = serializers.PrimaryKeyRelatedField(
-        queryset=Vestigio.objects.all(),
+        queryset=Vestigio.all_objects.all(),
         source='vestigio_contra_prova',
         required=False,
         allow_null=True,
     )
     procedimentos_ids = serializers.PrimaryKeyRelatedField(
-        queryset=ProcedimentoCadastrado.objects.all(),
+        queryset=ProcedimentoCadastrado.all_objects.all(),
         source='procedimentos',
+        many=True,
+        required=False,
+    )
+    # Permite vincular ocorrências já no momento do cadastro.
+    # O create() aplica a cascata: se a ocorrência tiver procedimento,
+    # este também é adicionado a vestigio.procedimentos.
+    ocorrencias_vinculadas_ids = serializers.PrimaryKeyRelatedField(
+        queryset=Ocorrencia.objects.all(),
+        source='ocorrencias_vinculadas',
         many=True,
         required=False,
     )
@@ -152,26 +192,78 @@ class VestigioCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Vestigio
         fields = [
+            'id',
             'lacre', 'num_processo_sei', 'conformidade', 'biologico',
             'ocorrencia', 'ano_ocorrencia', 'descricao',
             'unidade_demandante_id', 'servico_pericial_id', 'autoridade_id',
-            'user_destino_id', 'vestigio_contra_prova_id', 'procedimentos_ids',
+            'user_destino_id', 'vestigio_contra_prova_id',
+            'procedimentos_ids', 'ocorrencias_vinculadas_ids',
         ]
+        read_only_fields = ['id']
+
+    def validate(self, data):
+        """
+        validacaoDuplicacaoInformacoesVestigio — espelho de VestigioService do Java.
+
+        Bloqueia insert/update quando já existe outro vestígio com o mesmo
+        conjunto: lacre + ocorrencia + ano_ocorrencia + servico_pericial.
+        Todos os 4 campos precisam estar preenchidos para a validação disparar
+        (espelho de ValueValidUtil.isValid do Java).
+        """
+        lacre          = data.get('lacre')
+        ocorrencia     = data.get('ocorrencia')
+        ano_ocorrencia = data.get('ano_ocorrencia')
+        servico        = data.get('servico_pericial')
+
+        if lacre and ocorrencia and ano_ocorrencia and servico:
+            qs = Vestigio.objects.filter(
+                lacre=lacre,
+                ocorrencia=ocorrencia,
+                ano_ocorrencia=ano_ocorrencia,
+                servico_pericial=servico,
+            )
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError(
+                    {'detail': 'Informações duplicadas. Já existe um vestígio com esse lacre, ocorrência, ano e serviço pericial.'}
+                )
+
+        return data
 
     def create(self, validated_data):
-        procedimentos = validated_data.pop('procedimentos', [])
+        procedimentos    = validated_data.pop('procedimentos', [])
+        ocorrencias      = validated_data.pop('ocorrencias_vinculadas', [])
         vestigio = Vestigio.objects.create(**validated_data)
+
         if procedimentos:
             vestigio.procedimentos.set(procedimentos)
+
+        if ocorrencias:
+            vestigio.ocorrencias_vinculadas.set(ocorrencias)
+            # Cascata: vincula o procedimento de cada ocorrência ao vestígio
+            for oc in ocorrencias:
+                oc_com_proc = Ocorrencia.objects.select_related(
+                    'procedimento_cadastrado'
+                ).filter(pk=oc.pk, procedimento_cadastrado__isnull=False).first()
+                if oc_com_proc:
+                    vestigio.procedimentos.add(oc_com_proc.procedimento_cadastrado)
+
         return vestigio
 
     def update(self, instance, validated_data):
         procedimentos = validated_data.pop('procedimentos', None)
+        ocorrencias   = validated_data.pop('ocorrencias_vinculadas', None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
         if procedimentos is not None:
             instance.procedimentos.set(procedimentos)
+        if ocorrencias is not None:
+            instance.ocorrencias_vinculadas.set(ocorrencias)
+            for oc in ocorrencias:
+                if oc.procedimento_cadastrado:
+                    instance.procedimentos.add(oc.procedimento_cadastrado)
         return instance
 
 
@@ -207,23 +299,23 @@ class VestigioMovimentacaoListSerializer(serializers.ModelSerializer):
 
 class VestigioMovimentacaoCreateSerializer(serializers.ModelSerializer):
     vestigio_id = serializers.PrimaryKeyRelatedField(
-        queryset=Vestigio.objects.all(),
+        queryset=Vestigio.all_objects.all(),
         source='vestigio',
     )
     unidade_demandante_id = serializers.PrimaryKeyRelatedField(
-        queryset=UnidadeDemandante.objects.all(),
+        queryset=UnidadeDemandante.all_objects.all(),
         source='unidade_demandante',
         required=False,
         allow_null=True,
     )
     servico_pericial_id = serializers.PrimaryKeyRelatedField(
-        queryset=ServicoPericial.objects.all(),
+        queryset=ServicoPericial.all_objects.all(),
         source='servico_pericial',
         required=False,
         allow_null=True,
     )
     autoridade_id = serializers.PrimaryKeyRelatedField(
-        queryset=Autoridade.objects.all(),
+        queryset=Autoridade.all_objects.all(),
         source='autoridade',
         required=False,
         allow_null=True,
@@ -308,7 +400,7 @@ class DNACreateSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
     vestigio_id = serializers.PrimaryKeyRelatedField(
-        queryset=Vestigio.objects.all(),
+        queryset=Vestigio.all_objects.all(),
         source='vestigio',
         required=False,
         allow_null=True,

@@ -280,6 +280,54 @@ def gerar_ficha_vestigio(vestigio, request):
         ]))
         story.append(desc_table)
 
+    # ── Seção 2: Ocorrências Vinculadas ─────────────────────────────────────────
+    ocorrencias = vestigio.ocorrencias_vinculadas.select_related(
+        'servico_pericial',
+        'unidade_demandante',
+        'procedimento_cadastrado__tipo_procedimento',
+    ).all()
+
+    if ocorrencias.exists():
+        _adicionar_secao(story, st, '2. OCORRÊNCIAS VINCULADAS')
+
+        oc_cab = ['Nº Ocorrência', 'Status', 'Serviço', 'Unidade', 'Procedimento']
+        oc_cab_row = [
+            Paragraph(c, ParagraphStyle('ch2', fontName='Helvetica-Bold', fontSize=7, textColor=PRETO))
+            for c in oc_cab
+        ]
+        oc_rows = [oc_cab_row]
+
+        for oc in ocorrencias:
+            proc_txt = '—'
+            if oc.procedimento_cadastrado:
+                p = oc.procedimento_cadastrado
+                proc_txt = f"{p.tipo_procedimento.sigla} {p.numero}/{p.ano}"
+
+            oc_rows.append([
+                Paragraph(oc.numero_ocorrencia, st['mov_data']),
+                Paragraph(oc.get_status_display(), st['mov_texto']),
+                Paragraph(oc.servico_pericial.sigla if oc.servico_pericial else '—', st['mov_texto']),
+                Paragraph(oc.unidade_demandante.sigla if oc.unidade_demandante else '—', st['mov_texto']),
+                Paragraph(proc_txt, st['mov_texto']),
+            ])
+
+        oc_table = Table(
+            oc_rows,
+            colWidths=[3.8 * cm, 3.5 * cm, 2.4 * cm, 3.0 * cm, 4.7 * cm],
+            repeatRows=1,
+        )
+        oc_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('LEFTPADDING', (0, 0), (-1, -1), 2),
+            ('LINEBELOW', (0, 0), (-1, 0), 1.2, PRETO),
+            ('LINEBELOW', (0, 1), (-1, -1), 0.5, BORDAS),
+            ('ROWBACKGROUNDS', (1, 1), (-1, -1), [BRANCO, CINZA_CLARO]),
+        ]))
+        story.append(oc_table)
+
+    # ── Seção 3: Cadeia de Custódia ──────────────────────────────────────────────
     movimentacoes = VestigioMovimentacao.all_objects.filter(
         vestigio=vestigio
     ).select_related(
@@ -288,7 +336,8 @@ def gerar_ficha_vestigio(vestigio, request):
     ).order_by('created_at')
 
     total_mov = movimentacoes.count()
-    _adicionar_secao(story, st, f'2. CADEIA DE CUSTÓDIA  —  {total_mov + 1} evento(s)')
+    num_secao = '3' if ocorrencias.exists() else '2'
+    _adicionar_secao(story, st, f'{num_secao}. CADEIA DE CUSTÓDIA  —  {total_mov + 1} evento(s)')
 
     st_anulado = ParagraphStyle('anulado', fontName='Helvetica-Oblique', fontSize=8, textColor=CINZA_MEDIO)
     st_status = ParagraphStyle('st_st', fontName='Helvetica-Bold', fontSize=8, textColor=PRETO)

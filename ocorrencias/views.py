@@ -1474,6 +1474,34 @@ class OcorrenciaViewSet(viewsets.ModelViewSet):
 
         return Response(eventos)
 
+    @action(detail=False, methods=["get"], url_path="buscar-por-numero")
+    def buscar_por_numero(self, request):
+        """
+        Busca uma ocorrência pelo número exato (numero_ocorrencia).
+        Usado pelo modal de vinculação vestígio ↔ ocorrência.
+
+        Query param: ?numero_ocorrencia=24050001/BAL
+        Retorna: {"exists": bool, "ocorrencia": {...} | null}
+        """
+        numero = request.query_params.get("numero_ocorrencia", "").strip().upper()
+        if not numero:
+            return Response({"exists": False, "ocorrencia": None})
+
+        try:
+            ocorrencia = Ocorrencia.objects.select_related(
+                "servico_pericial",
+                "unidade_demandante",
+                "procedimento_cadastrado__tipo_procedimento",
+            ).get(numero_ocorrencia__iexact=numero)
+
+            from custodia.serializers import OcorrenciaResumoSerializer
+            return Response({
+                "exists": True,
+                "ocorrencia": OcorrenciaResumoSerializer(ocorrencia).data,
+            })
+        except Ocorrencia.DoesNotExist:
+            return Response({"exists": False, "ocorrencia": None})
+
 
 class EnderecoOcorrenciaViewSet(viewsets.ModelViewSet):
     """

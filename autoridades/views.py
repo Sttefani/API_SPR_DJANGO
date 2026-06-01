@@ -36,6 +36,13 @@ class AutoridadeViewSet(viewsets.ModelViewSet):
         instance.soft_delete(user=self.request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+    @action(detail=False, methods=["get"], pagination_class=None)
+    def dropdown(self, request):
+        """Retorna TODAS as autoridades para uso em dropdowns (sem paginação)."""
+        queryset = Autoridade.objects.select_related("cargo").all().order_by("nome")
+        serializer = AutoridadeSerializer(queryset, many=True)
+        return Response(serializer.data)
+
     @action(detail=False, methods=["get"])
     def lixeira(self, request):
         lixeira_qs = (

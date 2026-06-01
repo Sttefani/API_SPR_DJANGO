@@ -22,11 +22,13 @@ from .serializers import (
     DNADetailSerializer,
     DNACreateSerializer,
     UnidadeResumoSerializer,
+    OcorrenciaResumoSerializer,
 )
 from .permissions import PodeCustodiar, PodeVerCustodia, IsExternoUser, IsCustodianteUser
 from .pdf_generator import gerar_ficha_vestigio, gerar_ficha_dna
 from .filters import VestigioFilter, DNAFilter
 from usuarios.models import User
+from ocorrencias.models import Ocorrencia
 
 # Perfis que enxergam apenas os dados da sua própria unidade de lotação
 _PERFIS_UNIDADE = {User.Perfil.EXTERNO, User.Perfil.PERITO, User.Perfil.OPERACIONAL}
@@ -112,29 +114,94 @@ class VestigioViewSet(viewsets.ModelViewSet):
         serializer.save(created_by=self.request.user)
 
     def perform_update(self, serializer):
-        # ---> SEGURANÇA BACKEND: Impede alteração se o vestígio já estiver FINALIZADO
-        instance = self.get_object()
+        instance = serializer.instance  # já carregado pelo update() do DRF — sem double-fetch
+        user = self.request.user
+
         if instance.status == Vestigio.Status.FINALIZADO:
             raise ValidationError(
-                {"detail": "Não é permitido alterar um vestígio com status FINALIZADO. É necessário reabri-lo primeiro."}
+                {"detail": "Não é permitido alterar um vestígio FINALIZADO. Reabra-o primeiro."}
             )
-        serializer.save(updated_by=self.request.user)
+
+        # Apenas autor do cadastro ou ADMIN/SUPER_ADMIN pode editar (espelho do VestigioService.update)
+        _is_admin = (
+            user.perfil in {User.Perfil.ADMINISTRATIVO, User.Perfil.SUPER_ADMIN}
+            or user.is_superuser
+        )
+        if not _is_admin and instance.created_by != user:
+            raise ValidationError(
+                {"detail": "Apenas o autor do cadastro ou um administrador pode editar este vestígio."}
+            )
+
+        serializer.save(updated_by=user)
 
     def perform_destroy(self, instance):
         instance.soft_delete(self.request.user)
 
     @action(detail=True, methods=['post'], url_path='finalizar')
     def finalizar(self, request, pk=None):
+        """
+        Finaliza um vestígio.
+
+        Regras (espelho de VestigioMovimentacaoService.finalizar):
+        - Apenas ADMIN, SUPER_ADMIN ou CUSTODIANTE podem finalizar.
+        - Deve existir ao menos uma movimentação.
+        - A última movimentação deve estar aceita.
+        - Cria automaticamente uma movimentação final baseada na última (BeanUtils.copyProperties).
+        """
         vestigio = self.get_object()
         serializer = FinalizarVestigioSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        user = request.user
+
+        pode_finalizar = (
+            user.perfil in {User.Perfil.ADMINISTRATIVO, User.Perfil.SUPER_ADMIN, User.Perfil.CUSTODIANTE}
+            or user.is_superuser
+        )
+        if not pode_finalizar:
+            return Response(
+                {'detail': 'Apenas administradores ou custodiantes podem finalizar vestígios.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        movimentacoes = VestigioMovimentacao.objects.filter(
+            vestigio=vestigio
+        ).order_by('-created_at')
+
+        if not movimentacoes.exists():
+            raise ValidationError(
+                {'detail': 'Precisa existir ao menos uma movimentação para finalizar o vestígio.'}
+            )
+
+        ultima_mov = movimentacoes.first()
+        if not ultima_mov.aceito:
+            raise ValidationError(
+                {'detail': 'A última movimentação precisa ser aceita antes de finalizar.'}
+            )
+
+        descricao_final = serializer.validated_data.get('descricao') or ultima_mov.descricao
+
         vestigio.status = Vestigio.Status.FINALIZADO
         vestigio.saiu_da_custodia = serializer.validated_data['saiu_da_custodia']
-        if serializer.validated_data.get('descricao'):
-            vestigio.descricao = serializer.validated_data['descricao']
-        vestigio.updated_by = request.user
+        if descricao_final:
+            vestigio.descricao = descricao_final
+        vestigio.updated_by = user
         vestigio.save()
+
+        # Cria movimentação final copiando a última (BeanUtils.copyProperties do Java)
+        VestigioMovimentacao.objects.create(
+            vestigio=vestigio,
+            lacre=ultima_mov.lacre,
+            num_processo_sei=ultima_mov.num_processo_sei,
+            descricao=descricao_final,
+            unidade_demandante=ultima_mov.unidade_demandante,
+            servico_pericial=ultima_mov.servico_pericial,
+            autoridade=ultima_mov.autoridade,
+            user_destino=ultima_mov.user_destino,
+            aceito=True,
+            data_hora_aceito=timezone.now(),
+            created_by=user,
+        )
 
         return Response(VestigioDetailSerializer(vestigio).data)
 
@@ -143,6 +210,30 @@ class VestigioViewSet(viewsets.ModelViewSet):
         vestigio = self.get_object()
         vestigio.status = Vestigio.Status.ANDAMENTO
         vestigio.saiu_da_custodia = False
+        vestigio.updated_by = request.user
+        vestigio.save()
+        return Response(VestigioDetailSerializer(vestigio).data)
+
+    @action(detail=True, methods=['patch'], url_path='salvar-ocorrencia')
+    def salvar_ocorrencia(self, request, pk=None):
+        """
+        salvarOcorrencia — espelho de VestigioService.salvarOcorrencia do Java.
+
+        O campo ocorrência é imutável após preenchido: só pode ser gravado
+        quando ainda está em branco (ValueValidUtil.isValid no Java).
+        """
+        vestigio = self.get_object()
+
+        if vestigio.ocorrencia:
+            raise ValidationError(
+                {'detail': 'A ocorrência já foi preenchida e não pode ser alterada.'}
+            )
+
+        ocorrencia = request.data.get('ocorrencia', '').strip()
+        if not ocorrencia:
+            raise ValidationError({'detail': 'O campo ocorrência é obrigatório.'})
+
+        vestigio.ocorrencia = ocorrencia
         vestigio.updated_by = request.user
         vestigio.save()
         return Response(VestigioDetailSerializer(vestigio).data)
@@ -167,6 +258,134 @@ class VestigioViewSet(viewsets.ModelViewSet):
         ).order_by('-created_at')
         serializer = DNAListSerializer(dnas, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['get'], url_path='contra-provas')
+    def contra_provas(self, request, pk=None):
+        """
+        Lista todos os vestígios registrados como contraprova deste vestígio.
+        Usa o related_name='contra_provas' do FK vestigio_contra_prova.
+        """
+        vestigio = self.get_object()
+        qs = Vestigio.objects.filter(
+            vestigio_contra_prova=vestigio
+        ).select_related(
+            'unidade_demandante', 'servico_pericial',
+            'user_destino', 'created_by',
+        ).order_by('-created_at')
+        return Response(VestigioListSerializer(qs, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='vincular-ocorrencia')
+    def vincular_ocorrencia(self, request, pk=None):
+        """
+        Vincula ou desvincula uma Ocorrência a este Vestígio.
+
+        Body: {"ocorrencia_id": <id>, "acao": "add|remove"}
+
+        Regra de cascata: ao vincular, se a Ocorrência tiver
+        procedimento_cadastrado, ele é adicionado automaticamente
+        a vestigio.procedimentos (mesma lógica do Java).
+        """
+        vestigio = self.get_object()
+        ocorrencia_id = request.data.get('ocorrencia_id')
+        acao = request.data.get('acao', 'add')
+
+        if not ocorrencia_id:
+            raise ValidationError({'detail': 'ocorrencia_id é obrigatório.'})
+        if acao not in ('add', 'remove'):
+            raise ValidationError({'detail': 'acao deve ser "add" ou "remove".'})
+
+        try:
+            ocorrencia = Ocorrencia.objects.select_related(
+                'procedimento_cadastrado'
+            ).get(pk=ocorrencia_id)
+        except Ocorrencia.DoesNotExist:
+            raise ValidationError({'detail': f'Ocorrência {ocorrencia_id} não encontrada.'})
+
+        if acao == 'add':
+            vestigio.ocorrencias_vinculadas.add(ocorrencia)
+            # Cascata: vincula o procedimento da ocorrência ao vestígio
+            if ocorrencia.procedimento_cadastrado:
+                vestigio.procedimentos.add(ocorrencia.procedimento_cadastrado)
+            msg = f'Ocorrência {ocorrencia.numero_ocorrencia} vinculada com sucesso.'
+        else:
+            vestigio.ocorrencias_vinculadas.remove(ocorrencia)
+            msg = f'Ocorrência {ocorrencia.numero_ocorrencia} desvinculada.'
+
+        vestigio.updated_by = request.user
+        vestigio.save(update_fields=['updated_by', 'updated_at'])
+
+        return Response({
+            'message': msg,
+            'vestigio': VestigioDetailSerializer(vestigio, context={'request': request}).data,
+        })
+
+    @action(detail=True, methods=['get'], url_path='grafo')
+    def grafo(self, request, pk=None):
+        """
+        Retorna a cadeia completa de relações do vestígio:
+
+        vestigio_original (se for contraprova)
+            └─ este vestígio
+                 ├─ ocorrencias_vinculadas
+                 │    └─ procedimento_cadastrado → tipo_procedimento
+                 └─ contra_provas (outros vestígios que apontam para este)
+        """
+        vestigio = self.get_object()
+
+        # Ocorrências vinculadas com cadeia completa
+        ocorrencias_data = []
+        for oc in vestigio.ocorrencias_vinculadas.select_related(
+            'servico_pericial',
+            'unidade_demandante',
+            'procedimento_cadastrado__tipo_procedimento',
+        ).all():
+            oc_node = {
+                'id': oc.id,
+                'numero_ocorrencia': oc.numero_ocorrencia,
+                'status': oc.status,
+                'status_display': oc.get_status_display(),
+                'servico': {
+                    'id': oc.servico_pericial_id,
+                    'sigla': oc.servico_pericial.sigla,
+                    'nome': oc.servico_pericial.nome,
+                },
+                'unidade': {
+                    'id': oc.unidade_demandante_id,
+                    'sigla': oc.unidade_demandante.sigla,
+                },
+                'procedimento': None,
+            }
+            if oc.procedimento_cadastrado:
+                p = oc.procedimento_cadastrado
+                oc_node['procedimento'] = {
+                    'id': p.id,
+                    'numero_completo': f"{p.tipo_procedimento.sigla} {p.numero}/{p.ano}",
+                    'numero': p.numero,
+                    'ano': p.ano,
+                    'tipo': {
+                        'id': p.tipo_procedimento_id,
+                        'sigla': p.tipo_procedimento.sigla,
+                        'nome': p.tipo_procedimento.nome,
+                    },
+                }
+            ocorrencias_data.append(oc_node)
+
+        # Contraprovas
+        contra_provas_data = VestigioListSerializer(
+            vestigio.contra_provas.select_related(
+                'unidade_demandante', 'servico_pericial', 'user_destino'
+            ).all(),
+            many=True,
+        ).data
+
+        return Response({
+            'vestigio': VestigioDetailSerializer(vestigio, context={'request': request}).data,
+            'vestigio_original': VestigioListSerializer(
+                vestigio.vestigio_contra_prova
+            ).data if vestigio.vestigio_contra_prova else None,
+            'ocorrencias': ocorrencias_data,
+            'contra_provas': list(contra_provas_data),
+        })
 
     @action(detail=True, methods=['get'], url_path='ficha-pdf')
     def ficha_pdf(self, request, pk=None):
@@ -221,42 +440,172 @@ class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
             return [PodeCustodiar()]
         return [PodeVerCustodia()]
 
+    # -----------------------------------------------------------------------
+    # Helpers — espelham VestigioMovimentacaoService do Java
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _pode_ter_nova_movimentacao(vestigio) -> bool:
+        """
+        podeTerUmaNovaMovimentacao: retorna True se não há movimentação pendente
+        (ou seja, a última já foi aceita ou não existe nenhuma ainda).
+        """
+        ultima = VestigioMovimentacao.objects.filter(
+            vestigio=vestigio
+        ).order_by('-created_at').first()
+        return ultima is None or ultima.aceito
+
+    @staticmethod
+    def _posso_realizar_movimentacao(vestigio, user) -> bool:
+        """
+        possoRealizarUmaNovaMovimentacao: retorna True se o usuário tem
+        permissão para criar nova movimentação neste vestígio.
+        Regra: sem movimentações → qualquer um pode,
+               caso contrário → deve ser admin, destino ou do mesmo setor.
+        """
+        if (
+            user.perfil in {User.Perfil.ADMINISTRATIVO, User.Perfil.SUPER_ADMIN}
+            or user.is_superuser
+        ):
+            return True
+
+        ultima = VestigioMovimentacao.objects.filter(
+            vestigio=vestigio
+        ).order_by('-created_at').first()
+
+        if ultima is None:
+            return True  # primeira movimentação: qualquer perfil autorizado pode
+
+        if ultima.user_destino_id == user.pk:
+            return True  # sou o destinatário da última movimentação
+
+        if ultima.servico_pericial_id:
+            return user.servicos_periciais.filter(id=ultima.servico_pericial_id).exists()
+
+        return False
+
+    # -----------------------------------------------------------------------
+
     def perform_create(self, serializer):
-        movimentacao = serializer.save(created_by=self.request.user)
-        vestigio = movimentacao.vestigio
+        vestigio = serializer.validated_data['vestigio']
+        user = self.request.user
+
+        # Vestígio FINALIZADO não aceita novas movimentações
+        if vestigio.status == Vestigio.Status.FINALIZADO:
+            raise ValidationError(
+                {'detail': 'Vestígio finalizado. Não pode haver novas movimentações.'}
+            )
+
+        # Última movimentação deve estar aceita (podeTerUmaNovaMovimentacao)
+        if not self._pode_ter_nova_movimentacao(vestigio):
+            raise ValidationError(
+                {'detail': 'A movimentação anterior precisa ser aceita para dar continuidade.'}
+            )
+
+        # Usuário deve ter permissão (possoRealizarUmaNovaMovimentacao)
+        if not self._posso_realizar_movimentacao(vestigio, user):
+            raise ValidationError(
+                {'detail': 'Usuário não tem permissão para cadastrar nova movimentação neste vestígio.'}
+            )
+
+        movimentacao = serializer.save(created_by=user)
+
+        # Transição automática INICIAL → ANDAMENTO
         if vestigio.status == Vestigio.Status.INICIAL:
             vestigio.status = Vestigio.Status.ANDAMENTO
-            vestigio.updated_by = self.request.user
+            vestigio.updated_by = user
             vestigio.save()
+
+    def perform_update(self, serializer):
+        """
+        update — espelho de VestigioMovimentacaoService.update do Java.
+
+        Regras:
+        - Vestígio FINALIZADO não aceita edição.
+        - Movimentação já aceita não pode ser editada (MovimentacaoJaFoiAceitaException).
+        - Apenas o criador pode editar; ADMIN/SUPER_ADMIN podem sempre.
+        """
+        instance = serializer.instance  # já carregado pelo DRF — sem double-fetch
+        user = self.request.user
+
+        if instance.vestigio.status == Vestigio.Status.FINALIZADO:
+            raise ValidationError(
+                {'detail': 'Vestígio finalizado. Não pode haver novas movimentações.'}
+            )
+
+        if instance.aceito:
+            raise ValidationError(
+                {'detail': 'Essa movimentação não pode ser editada pois já foi aceita.'}
+            )
+
+        _is_admin = (
+            user.perfil in {User.Perfil.ADMINISTRATIVO, User.Perfil.SUPER_ADMIN}
+            or user.is_superuser
+        )
+        if not _is_admin and instance.created_by != user:
+            raise ValidationError(
+                {'detail': 'Usuário não tem permissão para editar essa movimentação.'}
+            )
+
+        serializer.save(updated_by=user)
 
     def perform_destroy(self, instance):
         instance.soft_delete(self.request.user)
 
     @action(detail=True, methods=['post'], url_path='aceitar')
     def aceitar(self, request, pk=None):
+        """
+        darAceite — espelho de VestigioMovimentacaoService.darAceite.
+
+        Quem pode aceitar:
+        - ADMIN / SUPER_ADMIN / CUSTODIANTE: sempre
+        - Mesmo serviço pericial da movimentação
+        - EXTERNO da mesma unidade demandante
+
+        Ao aceitar, user_destino da movimentação e do vestígio passam
+        a ser o usuário que aceitou (registra quem efetivamente recebeu).
+        """
         movimentacao = self.get_object()
         if movimentacao.aceito:
             return Response(
                 {'detail': 'Movimentação já foi aceita.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        
-        # 1. Efetiva o aceite da movimentação técnica
+
+        user = request.user
+        autorizado = False
+
+        if (
+            user.perfil in {User.Perfil.ADMINISTRATIVO, User.Perfil.SUPER_ADMIN, User.Perfil.CUSTODIANTE}
+            or user.is_superuser
+        ):
+            autorizado = True
+
+        elif movimentacao.servico_pericial_id:
+            autorizado = user.servicos_periciais.filter(
+                id=movimentacao.servico_pericial_id
+            ).exists()
+
+        elif _is_externo(user) and movimentacao.unidade_demandante_id and user.unidade_demandante_id:
+            autorizado = movimentacao.unidade_demandante_id == user.unidade_demandante_id
+
+        if not autorizado:
+            return Response(
+                {'detail': 'Usuário não tem permissão para aceitar esta movimentação.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Registra o aceite — quem aceitou vira o responsável (Java: setUserDestino(authUser))
+        movimentacao.user_destino = user
         movimentacao.aceito = True
         movimentacao.data_hora_aceito = timezone.now()
         movimentacao.save()
 
-        # 🚨 O APERTO DE MÃO BRINDADO AQUI:
         vestigio = movimentacao.vestigio
-        
-        # Transfere a responsabilidade para o perito de destino
-        vestigio.user_destino = movimentacao.user_destino
-        
-        # ATUALIZAÇÃO MACRO: Transfere o vestígio para o novo setor se houver mudança de especialidade
+        vestigio.user_destino = user  # responsabilidade passa para quem aceitou
         if movimentacao.servico_pericial:
             vestigio.servico_pericial = movimentacao.servico_pericial
-
-        vestigio.updated_by = request.user
+        vestigio.updated_by = user
         vestigio.save()
 
         return Response(VestigioMovimentacaoListSerializer(movimentacao).data)
@@ -398,9 +747,9 @@ class CustodiaResumoView(APIView):
                     'unidade_demandante__nome',
                 )
                 .annotate(
-                    total=Count('id'),
-                    ativos=Count('id', filter=~Q(status=Vestigio.Status.FINALIZADO)),
-                    biologicos=Count('id', filter=Q(biologico=True)),
+                    total=Count('id', distinct=True),
+                    ativos=Count('id', distinct=True, filter=~Q(status=Vestigio.Status.FINALIZADO)),
+                    biologicos=Count('id', distinct=True, filter=Q(biologico=True)),
                 )
                 .order_by('-total')
             )
@@ -474,9 +823,9 @@ class DashboardCustodianteView(APIView):
                 'unidade_demandante__nome',
             )
             .annotate(
-                total=Count('id'),
-                ativos=Count('id', filter=~Q(status=Vestigio.Status.FINALIZADO)),
-                biologicos=Count('id', filter=Q(biologico=True)),
+                total=Count('id', distinct=True),
+                ativos=Count('id', distinct=True, filter=~Q(status=Vestigio.Status.FINALIZADO)),
+                biologicos=Count('id', distinct=True, filter=Q(biologico=True)),
             )
             .order_by('-total')
         )
