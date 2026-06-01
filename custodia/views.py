@@ -4,11 +4,13 @@ from django.utils import timezone
 from django.db.models import Count, Q
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.exceptions import ValidationError
+from django_filters.rest_framework import DjangoFilterBackend
 
 from .models import Vestigio, VestigioMovimentacao, DNA
 from .serializers import (
@@ -72,7 +74,11 @@ def _qs_filtro_unidade(qs, user, campo_unidade, campo_destino=None):
 
 class VestigioViewSet(viewsets.ModelViewSet):
     permission_classes = [PodeVerCustodia]
-    filterset_class = VestigioFilter
+    filter_backends   = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class   = VestigioFilter
+    search_fields     = ['lacre', 'num_processo_sei', 'ocorrencia', 'descricao', '=id']
+    ordering_fields   = ['created_at', 'lacre', 'status']
+    ordering          = ['-created_at']
 
     def get_queryset(self):
         qs = Vestigio.objects.select_related(
@@ -140,13 +146,14 @@ class VestigioViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='finalizar')
     def finalizar(self, request, pk=None):
         """
-        Finaliza um vestígio.
+        Finaliza um vestígio com assinatura digital do responsável.
 
-        Regras (espelho de VestigioMovimentacaoService.finalizar):
+        Regras:
         - Apenas ADMIN, SUPER_ADMIN ou CUSTODIANTE podem finalizar.
-        - Deve existir ao menos uma movimentação.
-        - A última movimentação deve estar aceita.
-        - Cria automaticamente uma movimentação final baseada na última (BeanUtils.copyProperties).
+        - Deve existir ao menos uma movimentação com a última aceita.
+        - Exige motivo_finalizacao (obrigatório para não-repúdio).
+        - Exige assinatura digital: email + senha do usuário autenticado.
+        - Cria movimentação final copiando a última (BeanUtils.copyProperties do Java).
         """
         vestigio = self.get_object()
         serializer = FinalizarVestigioSerializer(data=request.data)
@@ -154,6 +161,7 @@ class VestigioViewSet(viewsets.ModelViewSet):
 
         user = request.user
 
+        # ── Verificação de perfil ─────────────────────────────────────────
         pode_finalizar = (
             user.perfil in {User.Perfil.ADMINISTRATIVO, User.Perfil.SUPER_ADMIN, User.Perfil.CUSTODIANTE}
             or user.is_superuser
@@ -164,6 +172,22 @@ class VestigioViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # ── Assinatura digital (não-repúdio) ──────────────────────────────
+        email_assinado = serializer.validated_data['assinatura_email']
+        senha_assinada = serializer.validated_data['assinatura_senha']
+
+        if email_assinado.lower().strip() != user.email.lower().strip():
+            return Response(
+                {'detail': 'O e-mail de assinatura não corresponde ao usuário autenticado.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not user.check_password(senha_assinada):
+            return Response(
+                {'detail': 'Senha incorreta. Assinatura digital não confirmada.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── Pré-requisitos de movimentação ────────────────────────────────
         movimentacoes = VestigioMovimentacao.objects.filter(
             vestigio=vestigio
         ).order_by('-created_at')
@@ -179,12 +203,12 @@ class VestigioViewSet(viewsets.ModelViewSet):
                 {'detail': 'A última movimentação precisa ser aceita antes de finalizar.'}
             )
 
-        descricao_final = serializer.validated_data.get('descricao') or ultima_mov.descricao
+        # ── Gravar finalização ────────────────────────────────────────────
+        motivo = serializer.validated_data['motivo_finalizacao']
 
         vestigio.status = Vestigio.Status.FINALIZADO
         vestigio.saiu_da_custodia = serializer.validated_data['saiu_da_custodia']
-        if descricao_final:
-            vestigio.descricao = descricao_final
+        vestigio.motivo_finalizacao = motivo
         vestigio.updated_by = user
         vestigio.save()
 
@@ -193,7 +217,7 @@ class VestigioViewSet(viewsets.ModelViewSet):
             vestigio=vestigio,
             lacre=ultima_mov.lacre,
             num_processo_sei=ultima_mov.num_processo_sei,
-            descricao=descricao_final,
+            descricao=motivo,
             unidade_demandante=ultima_mov.unidade_demandante,
             servico_pericial=ultima_mov.servico_pericial,
             autoridade=ultima_mov.autoridade,

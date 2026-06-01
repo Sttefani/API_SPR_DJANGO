@@ -134,7 +134,7 @@ class VestigioDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'lacre', 'num_processo_sei', 'conformidade', 'biologico',
             'ocorrencia', 'ano_ocorrencia', 'status', 'status_display',
-            'descricao', 'saiu_da_custodia',
+            'descricao', 'saiu_da_custodia', 'motivo_finalizacao',
             'unidade_demandante', 'servico_pericial', 'autoridade',
             'user_destino', 'procedimentos', 'ocorrencias_vinculadas',
             'vestigio_contra_prova', 'vestigio_contra_prova_lacre',
@@ -268,8 +268,11 @@ class VestigioCreateSerializer(serializers.ModelSerializer):
 
 
 class FinalizarVestigioSerializer(serializers.Serializer):
-    saiu_da_custodia = serializers.BooleanField()
-    descricao = serializers.CharField(required=False, allow_blank=True)
+    saiu_da_custodia   = serializers.BooleanField()
+    motivo_finalizacao = serializers.CharField(required=True)
+    # Campos de assinatura digital — verificados no backend, nunca salvos
+    assinatura_email   = serializers.EmailField(write_only=True)
+    assinatura_senha   = serializers.CharField(write_only=True)
 
 
 # ---------------------------------------------------------------------------

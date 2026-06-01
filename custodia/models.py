@@ -23,6 +23,7 @@ class Vestigio(AuditModel):
     )
     descricao = models.TextField(max_length=3000, blank=True, null=True)
     saiu_da_custodia = models.BooleanField(default=False)
+    motivo_finalizacao = models.TextField(max_length=2000, blank=True, null=True)
 
     unidade_demandante = models.ForeignKey(
         'unidades_demandantes.UnidadeDemandante',
@@ -225,6 +226,22 @@ class DNA(AuditModel):
         null=True, blank=True,
         related_name='dnas',
     )
+
+    # Campos de texto livre que devem ser salvos em maiúsculas
+    _CAMPOS_UPPERCASE = [
+        'nome', 'naturalidade', 'mae', 'pai', 'rg',
+        'unidade_prisional', 'tipo_penal', 'lacres',
+        'testemunha', 'testemunha2', 'notas', 'pais',
+        'ocorrencia', 'processo_judicial', 'num_processo_sei',
+        'codigo_barras', 'responsavel_coleta',
+    ]
+
+    def save(self, *args, **kwargs):
+        for campo in self._CAMPOS_UPPERCASE:
+            valor = getattr(self, campo, None)
+            if valor:
+                setattr(self, campo, valor.strip().upper())
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"DNA — {self.nome} ({self.cpf})"

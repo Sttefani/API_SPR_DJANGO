@@ -116,3 +116,4 @@ zipp==3.23.0
 whitenoise
 gunicorn
 dj-database-url
+pymysql
