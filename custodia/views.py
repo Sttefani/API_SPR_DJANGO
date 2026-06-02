@@ -27,7 +27,7 @@ from .serializers import (
     OcorrenciaResumoSerializer,
 )
 from .permissions import PodeCustodiar, PodeVerCustodia, IsExternoUser, IsCustodianteUser, IsSuperAdmin
-from .pdf_generator import gerar_ficha_vestigio, gerar_ficha_dna
+from .pdf_generator import gerar_ficha_vestigio, gerar_ficha_dna, gerar_certidao_ausencia_dna
 from .filters import VestigioFilter, DNAFilter
 from usuarios.models import User
 from ocorrencias.models import Ocorrencia
@@ -707,6 +707,55 @@ class DNAViewSet(viewsets.ModelViewSet):
         """Gera a Ficha de Coleta de DNA / Perfil Genético em PDF com QR code."""
         dna = self.get_object()
         return gerar_ficha_dna(dna, request)
+
+    @action(detail=False, methods=['get'], url_path='certidao-ausencia',
+            permission_classes=[PodeVerCustodia])
+    def certidao_ausencia(self, request):
+        """
+        Certidão de Ausência de Registro de Perfil Genético.
+
+        Emitida apenas quando a consulta ao banco de DNA retorna zero resultados.
+        Se o DNA for encontrado, retorna 400 com o ID do registro existente.
+
+        Query params (ao menos um obrigatório):
+          - nome  (busca por icontains, ignora maiúsculas)
+          - cpf   (busca exata após remover pontuação)
+          - rg    (busca por icontains, ignora maiúsculas)
+        """
+        nome = request.query_params.get('nome', '').strip()
+        cpf  = request.query_params.get('cpf',  '').strip()
+        rg   = request.query_params.get('rg',   '').strip()
+
+        if not nome and not cpf and not rg:
+            return Response(
+                {'detail': 'Informe ao menos nome, CPF ou RG para realizar a consulta.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        qs = DNA.objects.all()
+        if cpf:
+            cpf_limpo = cpf.replace('.', '').replace('-', '').replace(' ', '')
+            qs = qs.filter(cpf__icontains=cpf_limpo)
+        if nome:
+            qs = qs.filter(nome__icontains=nome.upper())
+        if rg:
+            qs = qs.filter(rg__icontains=rg.upper())
+
+        if qs.exists():
+            dna = qs.first()
+            return Response(
+                {
+                    'detail': (
+                        'Registro de perfil genético encontrado para os dados informados. '
+                        'Não é possível emitir certidão de ausência.'
+                    ),
+                    'dna_id': dna.id,
+                    'dna_nome': dna.nome,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        return gerar_certidao_ausencia_dna(request, nome=nome, cpf=cpf, rg=rg)
 
 
 # ---------------------------------------------------------------------------
