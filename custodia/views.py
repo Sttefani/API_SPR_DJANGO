@@ -5,14 +5,14 @@ from django.db.models import Count, Q
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.filters import SearchFilter, OrderingFilter
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.exceptions import ValidationError
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Vestigio, VestigioMovimentacao, DNA
+from .models import Vestigio, VestigioMovimentacao, DNA, CertidaoRegistro, FichaVestigioRegistro
 from .serializers import (
     VestigioListSerializer,
     VestigioDetailSerializer,
@@ -27,13 +27,76 @@ from .serializers import (
     OcorrenciaResumoSerializer,
 )
 from .permissions import PodeCustodiar, PodeVerCustodia, IsExternoUser, IsCustodianteUser, IsSuperAdmin
-from .pdf_generator import gerar_ficha_vestigio, gerar_ficha_dna, gerar_certidao_ausencia_dna
-from .filters import VestigioFilter, DNAFilter
+from .pdf_generator import (
+    gerar_ficha_vestigio, gerar_ficha_dna, gerar_certidao_ausencia_dna,
+    gerar_relatorio_vestigios, gerar_relatorio_dnas,
+)
+from .filters import VestigioFilter, VestigioMovimentacaoFilter, DNAFilter
 from usuarios.models import User
 from ocorrencias.models import Ocorrencia
 
 # Perfis que enxergam apenas os dados da sua própria unidade de lotação
 _PERFIS_UNIDADE = {User.Perfil.EXTERNO, User.Perfil.PERITO, User.Perfil.OPERACIONAL}
+
+
+def _desc_filtros_vestigios(params) -> str:
+    """Monta string legível com os filtros ativos para o cabeçalho do relatório PDF."""
+    _status = {'INICIAL': 'Inicial', 'ANDAMENTO': 'Em Andamento', 'FINALIZADO': 'Finalizado'}
+    partes = []
+    if params.get('status'):
+        partes.append(f"Status: {_status.get(params['status'], params['status'])}")
+    if params.get('lacre'):
+        partes.append(f"Lacre: {params['lacre']}")
+    if params.get('num_processo_sei'):
+        partes.append(f"SEI: {params['num_processo_sei']}")
+    if params.get('ocorrencia'):
+        partes.append(f"Ocorrência: {params['ocorrencia']}")
+    if params.get('biologico'):
+        partes.append(f"Biológico: {'Sim' if params['biologico'].lower() == 'true' else 'Não'}")
+    if params.get('conformidade'):
+        partes.append(f"Conformidade: {'Sim' if params['conformidade'].lower() == 'true' else 'Não'}")
+    if params.get('search'):
+        partes.append(f'Busca: "{params["search"]}"')
+    if params.get('servico_pericial'):
+        try:
+            from servicos_periciais.models import ServicoPericial
+            sp = ServicoPericial.objects.get(pk=params['servico_pericial'])
+            partes.append(f'Serviço: {sp.sigla}')
+        except Exception:
+            partes.append(f"Serviço ID: {params['servico_pericial']}")
+    if params.get('unidade_demandante'):
+        try:
+            from unidades_demandantes.models import UnidadeDemandante
+            ud = UnidadeDemandante.objects.get(pk=params['unidade_demandante'])
+            partes.append(f'Unidade: {ud.sigla}')
+        except Exception:
+            partes.append(f"Unidade ID: {params['unidade_demandante']}")
+    return ' | '.join(partes) if partes else 'Todos os registros'
+
+
+def _desc_filtros_dnas(params) -> str:
+    partes = []
+    if params.get('nome'):
+        partes.append(f"Nome: {params['nome']}")
+    if params.get('cpf'):
+        partes.append(f"CPF: {params['cpf']}")
+    if params.get('situacao'):
+        _sit = {'APENADO': 'Apenado', 'NAO_APENADO': 'Não Apenado'}
+        partes.append(f"Situação: {_sit.get(params['situacao'], params['situacao'])}")
+    if params.get('finalidade_coleta'):
+        _fin = {'LEI': 'Lei 12.654/2012', 'DJ': 'Decisão Judicial'}
+        partes.append(f"Finalidade: {_fin.get(params['finalidade_coleta'], params['finalidade_coleta'])}")
+    if params.get('uf'):
+        partes.append(f"UF: {params['uf']}")
+    if params.get('data_de'):
+        partes.append(f"Coleta a partir de: {params['data_de']}")
+    if params.get('data_ate'):
+        partes.append(f"Coleta até: {params['data_ate']}")
+    if params.get('search'):
+        partes.append(f'Busca: "{params["search"]}"')
+    if params.get('registrado_por_usuario_externo'):
+        partes.append('Registrado por usuário externo')
+    return ' | '.join(partes) if partes else 'Todos os registros'
 
 
 def _is_externo(user):
@@ -431,13 +494,82 @@ class VestigioViewSet(viewsets.ModelViewSet):
             'biologicos': qs.filter(biologico=True).count(),
         })
 
+    @action(detail=False, methods=['get'], url_path='relatorio-pdf',
+            permission_classes=[PodeVerCustodia])
+    def relatorio_pdf(self, request):
+        """Relatório em lote PDF (paisagem) com todos os filtros aplicados."""
+        qs = self.filter_queryset(self.get_queryset())
+        return gerar_relatorio_vestigios(qs, request, _desc_filtros_vestigios(request.query_params))
+
+    @action(detail=False, methods=['get'], url_path='validar-ficha',
+            permission_classes=[AllowAny])
+    def validar_ficha(self, request):
+        """
+        Valida a autenticidade de uma Ficha de Acompanhamento do Vestígio (FAV).
+
+        Endpoint público — acessível via QR Code sem autenticação.
+
+        Query param:
+          - protocolo  ex.: A1B2-C3D4-E5F6-G7H8  (com ou sem hífens)
+        """
+        protocolo_raw = request.query_params.get('protocolo', '').strip().upper()
+        protocolo = protocolo_raw.replace('-', '')
+
+        if len(protocolo) != 16:
+            return Response(
+                {'valido': False, 'detail': 'Protocolo inválido.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            reg = FichaVestigioRegistro.objects.select_related(
+                'vestigio', 'emitido_por'
+            ).get(protocolo=protocolo)
+        except FichaVestigioRegistro.DoesNotExist:
+            return Response(
+                {
+                    'valido': False,
+                    'detail': (
+                        'Protocolo não encontrado. '
+                        'O documento pode ser inválido, adulterado ou ter sido emitido '
+                        'por uma versão anterior do sistema.'
+                    ),
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        protocolo_fmt = f'{protocolo[:4]}-{protocolo[4:8]}-{protocolo[8:12]}-{protocolo[12:16]}'
+
+        # Status atual do vestígio (pode ter mudado desde a emissão)
+        status_atual = None
+        status_display = None
+        if reg.vestigio:
+            status_atual   = reg.vestigio.status
+            status_display = reg.vestigio.get_status_display()
+
+        return Response({
+            'valido':          True,
+            'protocolo':       protocolo_fmt,
+            'vestigio_id':     reg.vestigio_id,
+            'vestigio_lacre':  reg.vestigio_lacre,
+            'status_atual':    status_atual,
+            'status_display':  status_display,
+            'emitido_por':     reg.emitido_por_nome,
+            'emitido_em':      reg.emitido_em.strftime('%d/%m/%Y %H:%M'),
+        })
+
 
 # ---------------------------------------------------------------------------
 # Movimentação de Vestígio
 # ---------------------------------------------------------------------------
 
 class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
-    permission_classes = [PodeVerCustodia]
+    permission_classes  = [PodeVerCustodia]
+    filter_backends     = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class     = VestigioMovimentacaoFilter
+    search_fields       = ['lacre', 'num_processo_sei', 'descricao', 'vestigio__lacre']
+    ordering_fields     = ['created_at', 'data_hora_aceito']
+    ordering            = ['-created_at']
 
     def get_queryset(self):
         qs = VestigioMovimentacao.objects.select_related(
@@ -756,6 +888,61 @@ class DNAViewSet(viewsets.ModelViewSet):
             )
 
         return gerar_certidao_ausencia_dna(request, nome=nome, cpf=cpf, rg=rg)
+
+    @action(detail=False, methods=['get'], url_path='relatorio-pdf',
+            permission_classes=[PodeVerCustodia])
+    def relatorio_pdf(self, request):
+        """Relatório em lote PDF (paisagem) com todos os filtros aplicados."""
+        qs = self.filter_queryset(self.get_queryset())
+        return gerar_relatorio_dnas(qs, request, _desc_filtros_dnas(request.query_params))
+
+    @action(detail=False, methods=['get'], url_path='validar-certidao',
+            permission_classes=[AllowAny])
+    def validar_certidao(self, request):
+        """
+        Valida a autenticidade de uma Certidão ou Comprovante de Ausência de DNA.
+
+        Endpoint público — acessível via QR Code sem autenticação.
+
+        Query param:
+          - protocolo  ex.: A1B2-C3D4-E5F6-G7H8  (com ou sem hífens)
+        """
+        protocolo_raw = request.query_params.get('protocolo', '').strip().upper()
+        protocolo = protocolo_raw.replace('-', '')
+
+        if len(protocolo) != 16:
+            return Response(
+                {'valido': False, 'detail': 'Protocolo inválido.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            reg = CertidaoRegistro.objects.select_related('emitido_por').get(protocolo=protocolo)
+        except CertidaoRegistro.DoesNotExist:
+            return Response(
+                {
+                    'valido': False,
+                    'detail': (
+                        'Protocolo não encontrado. '
+                        'O documento pode ser inválido, adulterado ou ter sido emitido '
+                        'por uma versão anterior do sistema.'
+                    ),
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        protocolo_fmt = f'{protocolo[:4]}-{protocolo[4:8]}-{protocolo[8:12]}-{protocolo[12:16]}'
+        return Response({
+            'valido':           True,
+            'protocolo':        protocolo_fmt,
+            'tipo':             reg.tipo,
+            'tipo_display':     reg.get_tipo_display(),
+            'nome_consultado':  reg.nome_consultado,
+            'cpf_consultado':   reg.cpf_consultado,
+            'rg_consultado':    reg.rg_consultado,
+            'emitido_por':      reg.emitido_por_nome,
+            'emitido_em':       reg.emitido_em.strftime('%d/%m/%Y %H:%M'),
+        })
 
 
 # ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ from reportlab.platypus import (
 from reportlab.platypus.flowables import Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
 from reportlab.lib.units import cm
 
@@ -178,7 +178,7 @@ def _adicionar_secao(story, st, titulo):
 
 def _gerar_rodape(canvas, doc, request, url_validacao, tag_documento):
     canvas.saveState()
-    w, h = A4
+    w, h = canvas._pagesize  # funciona para portrait e landscape
     y_linha = 2.4 * cm 
     
     qr_x = w - 1.8 * cm - 2.0 * cm 
@@ -242,8 +242,9 @@ def gerar_ficha_vestigio(vestigio, request):
     Suporta estados INICIAL, ANDAMENTO e FINALIZADO.
     A seção de finalização só aparece quando o vestígio foi efetivamente finalizado.
     """
+    import hashlib
     from django.http import FileResponse
-    from custodia.models import VestigioMovimentacao, Vestigio as _Vestigio
+    from custodia.models import VestigioMovimentacao, Vestigio as _Vestigio, FichaVestigioRegistro
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -257,8 +258,24 @@ def gerar_ficha_vestigio(vestigio, request):
     base = getSampleStyleSheet()
     story = []
 
+    # Protocolo único de autenticidade (mesmo modelo da certidão de ausência)
+    now_fav = timezone.now()
+    protocolo_raw = f"FAV{vestigio.id}{now_fav.isoformat()}{request.user.id}"
+    protocolo_fav = hashlib.sha256(protocolo_raw.encode()).hexdigest()[:16].upper()
+    protocolo_fmt = f"{protocolo_fav[:4]}-{protocolo_fav[4:8]}-{protocolo_fav[8:12]}-{protocolo_fav[12:16]}"
+
     host = request.build_absolute_uri('/')
-    url_validacao = f"{host.rstrip('/')}/#/gabinete-virtual/custodia/vestigios/{vestigio.id}"
+    url_validacao = f"{host.rstrip('/')}/api/custodia/vestigios/validar-ficha/?protocolo={protocolo_fav}"
+
+    # Grava o registro para validação posterior via QR code
+    FichaVestigioRegistro.objects.create(
+        protocolo        = protocolo_fav,
+        vestigio         = vestigio,
+        vestigio_lacre   = vestigio.lacre or '',
+        emitido_por      = request.user,
+        emitido_por_nome = getattr(request.user, 'nome_completo', None) or str(request.user),
+        emitido_em       = now_fav,
+    )
 
     # Estilos complementares
     st_dado_label = ParagraphStyle(
@@ -642,7 +659,7 @@ def gerar_ficha_vestigio(vestigio, request):
     story.append(cadeia_tbl)
 
     def rodape_cb_vestigio(canvas, doc_):
-        _gerar_rodape(canvas, doc_, request, url_validacao, f'Vestígio #{vestigio.id}')
+        _gerar_rodape(canvas, doc_, request, url_validacao, f'Vestígio #{vestigio.id} | Prot.: {protocolo_fmt}')
 
     doc.build(story, onFirstPage=rodape_cb_vestigio, onLaterPages=rodape_cb_vestigio)
     buffer.seek(0)
@@ -819,6 +836,19 @@ def gerar_certidao_ausencia_dna(request, nome: str, cpf: str, rg: str = ''):
     host          = request.build_absolute_uri('/')
     url_validacao = f"{host.rstrip('/')}/api/custodia/dnas/validar-certidao/?protocolo={protocolo}"
     emissao_fmt   = now.strftime('%d/%m/%Y  %H:%M')
+
+    # Grava o registro para validação posterior via QR code
+    from custodia.models import CertidaoRegistro as _CertReg
+    _CertReg.objects.create(
+        protocolo       = protocolo,
+        tipo            = _CertReg.Tipo.COMPROVANTE if is_externo else _CertReg.Tipo.CERTIDAO,
+        nome_consultado = nome,
+        cpf_consultado  = cpf,
+        rg_consultado   = rg,
+        emitido_por     = user,
+        emitido_por_nome= getattr(user, 'nome_completo', None) or str(user),
+        emitido_em      = now,
+    )
 
     # Metadados do emissor
     emissor_nome   = getattr(user, 'nome_completo', None) or str(user)
@@ -1092,3 +1122,188 @@ def gerar_certidao_ausencia_dna(request, nome: str, cpf: str, rg: str = ''):
     buffer.seek(0)
     nome_arquivo = f'{nome_arquivo_prefix}_{now.strftime("%Y%m%d_%H%M")}_{protocolo[:8]}.pdf'
     return FileResponse(buffer, as_attachment=False, filename=nome_arquivo, content_type='application/pdf')
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Relatório em Lote — Vestígios (formato paisagem)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def gerar_relatorio_vestigios(qs, request, filtros_desc: str = 'Todos os registros'):
+    from django.http import FileResponse
+
+    buffer = io.BytesIO()
+    pg = landscape(A4)
+    doc = SimpleDocTemplate(
+        buffer, pagesize=pg,
+        leftMargin=1.5 * cm, rightMargin=1.5 * cm,
+        topMargin=1.2 * cm, bottomMargin=3.8 * cm,
+        title='Relatório de Vestígios — SPR-Criminalística',
+    )
+
+    st   = _estilos()
+    base = getSampleStyleSheet()
+    story = []
+
+    st_cab_col = ParagraphStyle('rcab', parent=base['Normal'],
+                                fontName='Helvetica-Bold', fontSize=7, textColor=PRETO)
+    st_cel     = ParagraphStyle('rcel', parent=base['Normal'],
+                                fontName='Helvetica', fontSize=7.5, textColor=PRETO, leading=10)
+    st_cel_b   = ParagraphStyle('rcelb', parent=base['Normal'],
+                                fontName='Helvetica-Bold', fontSize=7.5, textColor=PRETO, leading=10)
+    st_filtros  = ParagraphStyle('rfilt', parent=base['Normal'],
+                                fontName='Helvetica-Oblique', fontSize=8,
+                                textColor=CINZA_MEDIO, leading=11)
+
+    _construir_cabecalho(story, st, 'RELATÓRIO DE VESTÍGIOS',
+                         'Custódia de Vestígios — Sistema SPR-Criminalística')
+
+    # ── Bloco de filtros + total ──────────────────────────────────────────────
+    total = qs.count()
+    story.append(Paragraph(f'<b>Filtros aplicados:</b> {filtros_desc}', st_filtros))
+    story.append(Paragraph(f'<b>Total de registros:</b> {total}', st_filtros))
+    story.append(Spacer(1, 0.3 * cm))
+
+    if total == 0:
+        story.append(Paragraph('Nenhum registro encontrado para os filtros informados.', st_filtros))
+    else:
+        # ── Tabela ───────────────────────────────────────────────────────────
+        # Larguras: 1.0 + 3.5 + 4.0 + 3.0 + 2.5 + 1.2 + 3.5 + 4.5 + 3.5 = 26.7cm
+        col_w = [1.0, 3.5, 4.0, 3.0, 2.5, 1.2, 3.5, 4.5, 3.5]
+        col_w = [c * cm for c in col_w]
+
+        cabecalho = [Paragraph(t, st_cab_col) for t in [
+            '#', 'Lacre', 'Processo SEI', 'Ocorrência', 'Status',
+            'Bio', 'Serviço', 'Unidade', 'Registrado em',
+        ]]
+        rows = [cabecalho]
+
+        _status_label = {'INICIAL': 'Inicial', 'ANDAMENTO': 'Andamento', 'FINALIZADO': 'Finalizado'}
+        for v in qs.select_related('servico_pericial', 'unidade_demandante', 'created_by'):
+            ocorrencia_txt = v.ocorrencia or '—'
+            if v.ano_ocorrencia:
+                ocorrencia_txt += f'/{v.ano_ocorrencia}'
+            rows.append([
+                Paragraph(str(v.id), st_cel),
+                Paragraph(v.lacre or '—', st_cel_b),
+                Paragraph(v.num_processo_sei or '—', st_cel),
+                Paragraph(ocorrencia_txt, st_cel),
+                Paragraph(_status_label.get(v.status, v.status), st_cel_b),
+                Paragraph('S' if v.biologico else 'N', st_cel),
+                Paragraph(v.servico_pericial.sigla if v.servico_pericial else '—', st_cel),
+                Paragraph(str(v.unidade_demandante) if v.unidade_demandante else '—', st_cel),
+                Paragraph(_formatar_dt(v.created_at)[:10], st_cel),
+            ])
+
+        tbl = Table(rows, colWidths=col_w, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ('LINEBELOW',     (0, 0), (-1, 0), 1.5, PRETO),
+            ('LINEBELOW',     (0, 1), (-1, -1), 0.4, BORDAS),
+            ('ROWBACKGROUNDS',(0, 1), (-1, -1), [BRANCO, CINZA_CLARO]),
+            ('TOPPADDING',    (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 3),
+            ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(tbl)
+
+    emissor = request.user.nome_completo if hasattr(request.user, 'nome_completo') else str(request.user)
+    url_val = f"{request.build_absolute_uri('/').rstrip('/')}/#/gabinete-virtual/custodia/vestigios"
+    tag = f'Relatório Vestígios — {timezone.now().strftime("%d/%m/%Y %H:%M")}'
+
+    def rodape_cb(canvas, doc_):
+        _gerar_rodape(canvas, doc_, request, url_val, tag)
+
+    doc.build(story, onFirstPage=rodape_cb, onLaterPages=rodape_cb)
+    buffer.seek(0)
+    nome = f'relatorio_vestigios_{timezone.now().strftime("%Y%m%d_%H%M")}.pdf'
+    return FileResponse(buffer, as_attachment=False, filename=nome, content_type='application/pdf')
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Relatório em Lote — DNAs (formato paisagem)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def gerar_relatorio_dnas(qs, request, filtros_desc: str = 'Todos os registros'):
+    from django.http import FileResponse
+
+    buffer = io.BytesIO()
+    pg = landscape(A4)
+    doc = SimpleDocTemplate(
+        buffer, pagesize=pg,
+        leftMargin=1.5 * cm, rightMargin=1.5 * cm,
+        topMargin=1.2 * cm, bottomMargin=3.8 * cm,
+        title='Relatório de Perfis Genéticos — SPR-Criminalística',
+    )
+
+    st   = _estilos()
+    base = getSampleStyleSheet()
+    story = []
+
+    st_cab_col = ParagraphStyle('rcab2', parent=base['Normal'],
+                                fontName='Helvetica-Bold', fontSize=7, textColor=PRETO)
+    st_cel     = ParagraphStyle('rcel2', parent=base['Normal'],
+                                fontName='Helvetica', fontSize=7.5, textColor=PRETO, leading=10)
+    st_cel_b   = ParagraphStyle('rcelb2', parent=base['Normal'],
+                                fontName='Helvetica-Bold', fontSize=7.5, textColor=PRETO, leading=10)
+    st_filtros  = ParagraphStyle('rfilt2', parent=base['Normal'],
+                                fontName='Helvetica-Oblique', fontSize=8,
+                                textColor=CINZA_MEDIO, leading=11)
+
+    _construir_cabecalho(story, st, 'RELATÓRIO DE PERFIS GENÉTICOS (DNA)',
+                         'Banco Nacional de Perfis Genéticos — Lei nº 12.654/2012 e Decreto nº 7.950/2013')
+
+    total = qs.count()
+    story.append(Paragraph(f'<b>Filtros aplicados:</b> {filtros_desc}', st_filtros))
+    story.append(Paragraph(f'<b>Total de registros:</b> {total}', st_filtros))
+    story.append(Spacer(1, 0.3 * cm))
+
+    if total == 0:
+        story.append(Paragraph('Nenhum registro encontrado para os filtros informados.', st_filtros))
+    else:
+        # Larguras: 1.0 + 5.5 + 3.0 + 2.5 + 2.5 + 2.5 + 4.7 + 2.0 + 3.0 = 26.7cm
+        col_w = [1.0, 5.5, 3.0, 2.5, 2.5, 2.5, 4.7, 2.0, 3.0]
+        col_w = [c * cm for c in col_w]
+
+        cabecalho = [Paragraph(t, st_cab_col) for t in [
+            '#', 'Nome', 'CPF', 'Situação', 'Finalidade',
+            'Data Coleta', 'Perito', 'Vestígio', 'Registrado em',
+        ]]
+        rows = [cabecalho]
+
+        _sit_label  = {'APENADO': 'Apenado', 'NAO_APENADO': 'Não Apenado'}
+        _fin_label  = {'LEI': 'Lei 12.654', 'DJ': 'Dec. Judicial'}
+        for d in qs.select_related('perito', 'vestigio', 'created_by'):
+            rows.append([
+                Paragraph(str(d.id), st_cel),
+                Paragraph(d.nome or '—', st_cel_b),
+                Paragraph(d.cpf or '—', st_cel),
+                Paragraph(_sit_label.get(d.situacao, d.situacao), st_cel),
+                Paragraph(_fin_label.get(d.finalidade_coleta, d.finalidade_coleta), st_cel),
+                Paragraph(_formatar_dt(d.data_da_coleta)[:10], st_cel),
+                Paragraph(d.perito.nome_completo if d.perito else '—', st_cel),
+                Paragraph(f'#{d.vestigio_id}' if d.vestigio_id else '—', st_cel),
+                Paragraph(_formatar_dt(d.created_at)[:10], st_cel),
+            ])
+
+        tbl = Table(rows, colWidths=col_w, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ('LINEBELOW',     (0, 0), (-1, 0), 1.5, PRETO),
+            ('LINEBELOW',     (0, 1), (-1, -1), 0.4, BORDAS),
+            ('ROWBACKGROUNDS',(0, 1), (-1, -1), [BRANCO, CINZA_CLARO]),
+            ('TOPPADDING',    (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 3),
+            ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(tbl)
+
+    url_val = f"{request.build_absolute_uri('/').rstrip('/')}/#/gabinete-virtual/custodia/dnas"
+    tag = f'Relatório DNA — {timezone.now().strftime("%d/%m/%Y %H:%M")}'
+
+    def rodape_cb(canvas, doc_):
+        _gerar_rodape(canvas, doc_, request, url_val, tag)
+
+    doc.build(story, onFirstPage=rodape_cb, onLaterPages=rodape_cb)
+    buffer.seek(0)
+    nome = f'relatorio_dnas_{timezone.now().strftime("%Y%m%d_%H%M")}.pdf'
+    return FileResponse(buffer, as_attachment=False, filename=nome, content_type='application/pdf')

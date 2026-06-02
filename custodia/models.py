@@ -250,3 +250,73 @@ class DNA(AuditModel):
         verbose_name = "DNA"
         verbose_name_plural = "DNAs"
         ordering = ['-created_at']
+
+
+class CertidaoRegistro(models.Model):
+    """
+    Registro de cada Certidão ou Comprovante de Ausência de DNA emitido.
+
+    Permite validar a autenticidade via QR code sem reprocessar o hash —
+    o protocolo é gravado no momento da emissão e consultado publicamente.
+    """
+
+    class Tipo(models.TextChoices):
+        CERTIDAO    = 'CERTIDAO',    'Certidão de Ausência'
+        COMPROVANTE = 'COMPROVANTE', 'Comprovante de Consulta'
+
+    protocolo       = models.CharField(max_length=16, unique=True, db_index=True)
+    tipo            = models.CharField(max_length=20, choices=Tipo.choices)
+    nome_consultado = models.CharField(max_length=255, blank=True)
+    cpf_consultado  = models.CharField(max_length=20,  blank=True)
+    rg_consultado   = models.CharField(max_length=30,  blank=True)
+    emitido_por_nome = models.CharField(max_length=255)
+    emitido_em      = models.DateTimeField()
+
+    emitido_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='certidoes_emitidas',
+    )
+
+    def __str__(self):
+        return f'{self.get_tipo_display()} — {self.protocolo}'
+
+    class Meta:
+        verbose_name = 'Certidão de Ausência'
+        verbose_name_plural = 'Certidões de Ausência'
+        ordering = ['-emitido_em']
+
+
+class FichaVestigioRegistro(models.Model):
+    """
+    Registro de cada Ficha de Acompanhamento de Vestígio emitida.
+
+    Permite validação pública via QR Code sem autenticação —
+    o protocolo é gravado no momento da emissão e consultado externamente.
+    """
+
+    protocolo        = models.CharField(max_length=16, unique=True, db_index=True)
+    vestigio         = models.ForeignKey(
+        Vestigio,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='fichas_emitidas',
+    )
+    vestigio_lacre   = models.CharField(max_length=255, blank=True)
+    emitido_por      = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='fichas_vestigio_emitidas',
+    )
+    emitido_por_nome = models.CharField(max_length=255)
+    emitido_em       = models.DateTimeField()
+
+    def __str__(self):
+        return f'FAV #{self.vestigio_id} — {self.protocolo}'
+
+    class Meta:
+        verbose_name = 'Ficha de Acompanhamento Emitida'
+        verbose_name_plural = 'Fichas de Acompanhamento Emitidas'
+        ordering = ['-emitido_em']

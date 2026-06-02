@@ -4,6 +4,26 @@ import django_filters
 from .models import Vestigio, VestigioMovimentacao, DNA
 
 
+class VestigioMovimentacaoFilter(django_filters.FilterSet):
+    vestigio          = django_filters.NumberFilter(field_name='vestigio__id')
+    servico_pericial  = django_filters.NumberFilter(field_name='servico_pericial__id')
+    unidade_demandante= django_filters.NumberFilter(field_name='unidade_demandante__id')
+    user_destino      = django_filters.NumberFilter(field_name='user_destino__id')
+    aceito            = django_filters.BooleanFilter()
+    lacre             = django_filters.CharFilter(lookup_expr='icontains')
+    num_processo_sei  = django_filters.CharFilter(lookup_expr='icontains')
+    data_de           = django_filters.DateFilter(field_name='created_at', lookup_expr='date__gte')
+    data_ate          = django_filters.DateFilter(field_name='created_at', lookup_expr='date__lte')
+
+    class Meta:
+        model = VestigioMovimentacao
+        fields = [
+            'vestigio', 'servico_pericial', 'unidade_demandante',
+            'user_destino', 'aceito', 'lacre', 'num_processo_sei',
+            'data_de', 'data_ate',
+        ]
+
+
 class VestigioFilter(django_filters.FilterSet):
     status = django_filters.CharFilter(lookup_expr='exact')
     servico_pericial = django_filters.NumberFilter(field_name='servico_pericial__id')
