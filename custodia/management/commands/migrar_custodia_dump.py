@@ -40,7 +40,8 @@ ROLE_PARA_PERFIL = {
     'ROLE_EXTERNO':     'EXTERNO',
 }
 
-INT_PARA_SIMNO = {0: 'NAO', 1: 'SIM', None: 'NAO'}
+# SimNao.NAO.value == 'NO'  /  SimNao.SIM.value == 'YES'  (TextChoices do Django)
+INT_PARA_SIMNO = {0: 'NO', 1: 'YES', None: 'NO'}
 STATUS_VESTIGIO = {'INICIAL', 'ANDAMENTO', 'FINALIZADO'}
 
 
@@ -788,7 +789,7 @@ class Command(BaseCommand):
                 gemeo=INT_PARA_SIMNO.get(row.get('gemeo'), 'NAO'),
                 transfusao=INT_PARA_SIMNO.get(row.get('tranfusao'), 'NAO'),  # typo resolvido
                 transplante=INT_PARA_SIMNO.get(row.get('transplante'), 'NAO'),
-                processado_banco_perfis_genetico='NAO',
+                processado_banco_perfis_genetico='NO',   # SimNao.NAO.value
                 unidade_prisional=row.get('unidade_prisional') or '',
                 tipo_penal=row.get('tipo_penal') or '',
                 data_da_coleta=to_datetime(row.get('data_da_coleta')),

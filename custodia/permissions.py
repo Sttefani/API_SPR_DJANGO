@@ -38,3 +38,22 @@ class IsCustodianteUser(BasePermission):
             request.user.is_authenticated
             and request.user.perfil == User.Perfil.CUSTODIANTE
         )
+
+
+class IsSuperAdmin(BasePermission):
+    """
+    Deleção de registros forenses.
+
+    Apenas SUPER_ADMIN (ou is_superuser Django) pode deletar vestígios,
+    movimentações e DNAs. O sistema Java original não tinha DELETE nesses
+    recursos — deleção é operação excepcional, restrita ao nível mais alto.
+    """
+    message = 'Apenas SUPER_ADMIN pode excluir registros forenses.'
+
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        return (
+            request.user.perfil == User.Perfil.SUPER_ADMIN
+            or request.user.is_superuser
+        )

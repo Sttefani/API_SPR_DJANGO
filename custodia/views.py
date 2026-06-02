@@ -26,7 +26,7 @@ from .serializers import (
     UnidadeResumoSerializer,
     OcorrenciaResumoSerializer,
 )
-from .permissions import PodeCustodiar, PodeVerCustodia, IsExternoUser, IsCustodianteUser
+from .permissions import PodeCustodiar, PodeVerCustodia, IsExternoUser, IsCustodianteUser, IsSuperAdmin
 from .pdf_generator import gerar_ficha_vestigio, gerar_ficha_dna
 from .filters import VestigioFilter, DNAFilter
 from usuarios.models import User
@@ -111,7 +111,10 @@ class VestigioViewSet(viewsets.ModelViewSet):
         return VestigioDetailSerializer
 
     def get_permissions(self):
-        if self.action in ('create', 'update', 'partial_update', 'destroy',
+        # Deleção restrita a SUPER_ADMIN — o Java original não tinha DELETE em vestígios
+        if self.action == 'destroy':
+            return [IsSuperAdmin()]
+        if self.action in ('create', 'update', 'partial_update',
                             'finalizar', 'reabrir'):
             return [PodeCustodiar()]
         return [PodeVerCustodia()]
@@ -460,7 +463,10 @@ class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
         return VestigioMovimentacaoListSerializer
 
     def get_permissions(self):
-        if self.action in ('create', 'update', 'partial_update', 'destroy'):
+        # Deleção restrita a SUPER_ADMIN — movimentações são registros de cadeia de custódia
+        if self.action == 'destroy':
+            return [IsSuperAdmin()]
+        if self.action in ('create', 'update', 'partial_update'):
             return [PodeCustodiar()]
         return [PodeVerCustodia()]
 
@@ -650,8 +656,10 @@ class DNAViewSet(viewsets.ModelViewSet):
     - ADMIN/SUPER_ADMIN/CUSTODIANTE: CRUD completo sem restrição.
     """
     permission_classes = [PodeVerCustodia]
-    filterset_class = DNAFilter
-    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    filter_backends   = [DjangoFilterBackend, SearchFilter]
+    filterset_class   = DNAFilter
+    search_fields     = ['nome', 'cpf', 'codigo_barras']   # ?search= busca nome/CPF/cód. barras
+    parser_classes    = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
         # Listagem global — sem filtro de unidade (banco nacional de perfis)
@@ -668,8 +676,11 @@ class DNAViewSet(viewsets.ModelViewSet):
         return DNADetailSerializer
 
     def get_permissions(self):
-        # EXTERNO não pode editar nem deletar
-        if self.action in ('update', 'partial_update', 'destroy'):
+        # Deleção restrita a SUPER_ADMIN — o Java original não tinha DELETE em DNAs
+        if self.action == 'destroy':
+            return [IsSuperAdmin()]
+        # EXTERNO não pode editar
+        if self.action in ('update', 'partial_update'):
             return [PodeCustodiar()]
         # Todos os autenticados podem criar e listar
         return [PodeVerCustodia()]
