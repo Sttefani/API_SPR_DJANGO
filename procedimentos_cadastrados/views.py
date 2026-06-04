@@ -123,10 +123,16 @@ class ProcedimentoCadastradoViewSet(viewsets.ModelViewSet):
     def ocorrencias_vinculadas(self, request, pk=None):
         procedimento = self.get_object()
         ocorrencias = procedimento.ocorrencias.all().order_by('-created_at')
-        
+
         from ocorrencias.serializers import OcorrenciaListSerializer
-        serializer = OcorrenciaListSerializer(ocorrencias, many=True)
-        
+        from custodia.serializers import VestigioListSerializer
+        oc_serializer = OcorrenciaListSerializer(ocorrencias, many=True)
+
+        vestigios = procedimento.vestigios_custodia.select_related(
+            'unidade_demandante', 'servico_pericial'
+        ).order_by('-created_at')
+        vest_serializer = VestigioListSerializer(vestigios, many=True)
+
         return Response({
             'procedimento': {
                 'id': procedimento.id,
@@ -135,5 +141,7 @@ class ProcedimentoCadastradoViewSet(viewsets.ModelViewSet):
                 'ano': procedimento.ano
             },
             'total_ocorrencias': ocorrencias.count(),
-            'ocorrencias': serializer.data
+            'ocorrencias': oc_serializer.data,
+            'vestigios': vest_serializer.data,
+            'total_vestigios': vestigios.count(),
         })

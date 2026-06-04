@@ -112,22 +112,39 @@ def _is_perito_ou_operacional(user):
     return user.perfil in {User.Perfil.PERITO, User.Perfil.OPERACIONAL}
 
 
-def _qs_filtro_unidade(qs, user, campo_unidade, campo_destino=None):
+def _qs_filtro_unidade(qs, user, campo_unidade, campo_destino=None,
+                       campo_criado_por=None, campo_servico=None):
     """
     Aplica o filtro de visibilidade por unidade ao queryset.
 
-    PERITO / OPERACIONAL: unidade da lotação  OU  atribuídos diretamente ao usuário
-    EXTERNO: apenas a unidade da lotação
+    PERITO / OPERACIONAL (nunca retorna qs.none()):
+      1. Serviços periciais do usuário (M2M) — critério principal quando campo_servico fornecido
+      2. Unidade demandante — se user.unidade_demandante estiver configurada
+      3. user_destino = user — atribuição direta
+      4. created_by = user  — autor do registro (se campo_criado_por fornecido)
+
+    EXTERNO:
+      - Com unidade: apenas unidade_demandante
+      - Sem unidade: qs.none()
     """
     ud = user.unidade_demandante
-    if not ud:
-        return qs.none()
 
     if _is_perito_ou_operacional(user) and campo_destino:
-        return qs.filter(
-            Q(**{campo_unidade: ud}) | Q(**{campo_destino: user})
-        ).distinct()
+        # Pessoais — sempre incluídos (nunca retorna vazio por falta de unidade)
+        q = Q(**{campo_destino: user})
+        if campo_criado_por:
+            q |= Q(**{campo_criado_por: user})
+        # Serviços periciais onde o usuário trabalha (critério principal para PERITO)
+        if campo_servico:
+            q |= Q(**{f'{campo_servico}__in': user.servicos_periciais.all()})
+        # Unidade demandante (complementar — se configurada)
+        if ud:
+            q |= Q(**{campo_unidade: ud})
+        return qs.filter(q).distinct()
 
+    # EXTERNO — exige unidade configurada
+    if not ud:
+        return qs.none()
     return qs.filter(**{campo_unidade: ud})
 
 
@@ -154,7 +171,7 @@ class VestigioViewSet(viewsets.ModelViewSet):
         ).prefetch_related('procedimentos')
 
         # Restrição por perfil:
-        # PERITO/OPERACIONAL → unidade da lotação OU atribuídos a eles
+        # PERITO/OPERACIONAL → serviços periciais OU atribuídos OU autor OU unidade
         # EXTERNO            → apenas unidade da lotação
         user = self.request.user
         if _filtra_por_unidade(user):
@@ -162,6 +179,8 @@ class VestigioViewSet(viewsets.ModelViewSet):
                 qs, user,
                 campo_unidade='unidade_demandante',
                 campo_destino='user_destino',
+                campo_criado_por='created_by',
+                campo_servico='servico_pericial',
             )
 
         return qs
@@ -477,6 +496,61 @@ class VestigioViewSet(viewsets.ModelViewSet):
             'contra_provas': list(contra_provas_data),
         })
 
+    @action(detail=True, methods=['post'], url_path='vincular-procedimento',
+            permission_classes=[PodeCustodiar])
+    def vincular_procedimento(self, request, pk=None):
+        """
+        Vincula ou desvincula um ProcedimentoCadastrado diretamente a um Vestígio.
+
+        Diferente da cascata automática (que ocorre via ocorrência), esta ação
+        permite criar o vínculo M2M direto — útil quando o vestígio pertence a
+        um procedimento mas não há ocorrência intermediária.
+
+        Body: { "procedimento_id": <int>, "acao": "add" | "remove" }
+        """
+        from procedimentos_cadastrados.models import ProcedimentoCadastrado
+
+        vestigio      = self.get_object()
+        proc_id       = request.data.get('procedimento_id')
+        acao          = request.data.get('acao', 'add')
+
+        if not proc_id:
+            raise ValidationError({'detail': 'procedimento_id é obrigatório.'})
+        if acao not in ('add', 'remove'):
+            raise ValidationError({'detail': 'acao deve ser "add" ou "remove".'})
+
+        try:
+            proc = ProcedimentoCadastrado.objects.select_related(
+                'tipo_procedimento'
+            ).get(pk=proc_id)
+        except ProcedimentoCadastrado.DoesNotExist:
+            raise ValidationError({'detail': f'Procedimento #{proc_id} não encontrado.'})
+
+        if acao == 'add':
+            vestigio.procedimentos.add(proc)
+            label = f'{proc.tipo_procedimento.sigla} {proc.numero}/{proc.ano}'
+            msg   = f'Procedimento {label} vinculado ao vestígio.'
+        else:
+            vestigio.procedimentos.remove(proc)
+            label = f'{proc.tipo_procedimento.sigla} {proc.numero}/{proc.ano}'
+            msg   = f'Procedimento {label} desvinculado do vestígio.'
+
+        vestigio.updated_by = request.user
+        vestigio.save(update_fields=['updated_by', 'updated_at'])
+
+        return Response({
+            'message': msg,
+            'procedimentos': [
+                {
+                    'id':    p.id,
+                    'label': f'{p.tipo_procedimento.sigla} {p.numero}/{p.ano}',
+                }
+                for p in vestigio.procedimentos.select_related(
+                    'tipo_procedimento'
+                ).all()
+            ],
+        })
+
     @action(detail=True, methods=['get'], url_path='ficha-pdf')
     def ficha_pdf(self, request, pk=None):
         """Gera a Ficha de Acompanhamento do Vestígio em PDF com QR code."""
@@ -577,7 +651,7 @@ class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
             'autoridade', 'user_destino', 'created_by',
         ).order_by('-created_at')
 
-        # PERITO/OPERACIONAL → movimentações da unidade OU de vestígios atribuídos a eles
+        # PERITO/OPERACIONAL → movimentações dos seus serviços periciais OU atribuídas a eles
         # EXTERNO            → apenas movimentações da unidade
         user = self.request.user
         if _filtra_por_unidade(user):
@@ -585,6 +659,7 @@ class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
                 qs, user,
                 campo_unidade='vestigio__unidade_demandante',
                 campo_destino='vestigio__user_destino',
+                campo_servico='vestigio__servico_pericial',
             )
 
         return qs
@@ -946,6 +1021,335 @@ class DNAViewSet(viewsets.ModelViewSet):
 
 
 # ---------------------------------------------------------------------------
+# Teia de Relações — grafo visual entre Vestígios, Ocorrências e Procedimentos
+# ---------------------------------------------------------------------------
+
+class GrafoRelacoesView(APIView):
+    """
+    Retorna nodes + edges prontos para Cytoscape.js.
+
+    Perfis autorizados: PERITO, OPERACIONAL, ADMINISTRATIVO, SUPER_ADMIN.
+
+    Query params:
+      - tipo: 'vestigio' | 'ocorrencia' | 'procedimento'
+      - id:   PK da entidade focal
+    """
+    permission_classes = [IsAuthenticated]
+
+    _PERFIS_PERMITIDOS = {
+        User.Perfil.PERITO,
+        User.Perfil.OPERACIONAL,
+        User.Perfil.ADMINISTRATIVO,
+        User.Perfil.SUPER_ADMIN,
+    }
+
+    def get(self, request):
+        user = request.user
+        if user.perfil not in self._PERFIS_PERMITIDOS and not user.is_superuser:
+            return Response(
+                {'detail': 'Acesso restrito a peritos, operacionais e administradores.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        tipo  = request.query_params.get('tipo', '').strip().lower()
+        id_raw = request.query_params.get('id',  '').strip()
+
+        if not tipo or not id_raw:
+            return Response(
+                {'detail': 'Parâmetros "tipo" e "id" são obrigatórios.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            pk = int(id_raw)
+        except ValueError:
+            return Response(
+                {'detail': '"id" deve ser inteiro.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if tipo == 'vestigio':
+            return self._grafo_vestigio(pk)
+        if tipo == 'ocorrencia':
+            return self._grafo_ocorrencia(pk)
+        if tipo == 'procedimento':
+            return self._grafo_procedimento(pk)
+
+        return Response(
+            {'detail': 'Tipo inválido. Use: vestigio, ocorrencia ou procedimento.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # ── Builders de nós ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _nv(v, focal=False, subtipo='vestigio'):
+        label = f'{v.lacre}\n#{v.id}' if v.lacre else f'#{v.id}'
+        # Procedimentos diretamente vinculados ao vestígio (M2M direto, sem ocorrência)
+        procs_diretos = [
+            {'id': p.id, 'label': f'{p.tipo_procedimento.sigla} {p.numero}/{p.ano}'}
+            for p in v.procedimentos.select_related('tipo_procedimento').all()
+        ]
+        return {'data': {
+            'id':                  f'vest_{v.id}',
+            'tipo':                subtipo,
+            'label':               label,
+            'focal':               focal,
+            'status':              v.status,
+            'status_display':      v.get_status_display(),
+            'unidade':             v.unidade_demandante.sigla if v.unidade_demandante else '—',
+            'servico':             v.servico_pericial.sigla   if v.servico_pericial   else '—',
+            'responsavel':         v.user_destino.nome_completo if v.user_destino else '—',
+            'biologico':           v.biologico,
+            'url':                 f'vestigio:{v.id}',
+            'procedimentos_diretos': procs_diretos,
+        }}
+
+    @staticmethod
+    def _no(oc, focal=False):
+        return {'data': {
+            'id':             f'oc_{oc.id}',
+            'tipo':           'ocorrencia',
+            'label':          oc.numero_ocorrencia,
+            'focal':          focal,
+            'status':         oc.status,
+            'status_display': oc.get_status_display(),
+            'perito':         oc.perito_atribuido.nome_completo if oc.perito_atribuido else 'Não atribuído',
+            'servico':        oc.servico_pericial.sigla   if oc.servico_pericial   else '—',
+            'unidade':        oc.unidade_demandante.sigla if oc.unidade_demandante else '—',
+            'url':            f'ocorrencia:{oc.id}',
+        }}
+
+    @staticmethod
+    def _np(proc, focal=False):
+        label = f'{proc.tipo_procedimento.sigla} {proc.numero}/{proc.ano}'
+        return {'data': {
+            'id':        f'proc_{proc.id}',
+            'tipo':      'procedimento',
+            'label':     label,
+            'focal':     focal,
+            'tipo_nome': proc.tipo_procedimento.nome,
+            'numero':    proc.numero,
+            'ano':       proc.ano,
+            'url':       f'procedimento:{proc.id}',
+        }}
+
+    @staticmethod
+    def _edge(src, tgt, tipo):
+        return {'data': {'id': f'e_{src}_{tgt}', 'source': src, 'target': tgt, 'tipo': tipo}}
+
+    @staticmethod
+    def _nm(mov, index):
+        """Nó de movimentação — para a cadeia de custódia cronológica."""
+        destino  = mov.user_destino.nome_completo.split()[0] if mov.user_destino else '?'
+        data_fmt = mov.created_at.strftime('%d/%m/%y') if mov.created_at else '?'
+        subtipo  = 'movimentacao_aceita' if mov.aceito else 'movimentacao_pendente'
+        return {'data': {
+            'id':           f'mov_{mov.id}',
+            'tipo':         subtipo,
+            'label':        f'Mov #{index}\n{destino} · {data_fmt}',
+            'focal':        False,
+            'aceito':       mov.aceito,
+            'criado_por':   mov.created_by.nome_completo  if mov.created_by  else '—',
+            'destinatario': mov.user_destino.nome_completo if mov.user_destino else '—',
+            'unidade':      mov.unidade_demandante.sigla   if mov.unidade_demandante else '—',
+            'servico':      mov.servico_pericial.sigla     if mov.servico_pericial   else '—',
+            'descricao':    mov.descricao or '',
+            'data_envio':   mov.created_at.strftime('%d/%m/%Y %H:%M')       if mov.created_at       else '—',
+            'data_aceite':  mov.data_hora_aceito.strftime('%d/%m/%Y %H:%M') if mov.data_hora_aceito else None,
+            'url':          f'movimentacao:{mov.id}',
+        }}
+
+    @staticmethod
+    def _nd(dna):
+        """Nó de DNA (perfil genético)."""
+        nome_curto = dna.nome[:18] + '…' if len(dna.nome) > 18 else dna.nome
+        return {'data': {
+            'id':              f'dna_{dna.id}',
+            'tipo':            'dna',
+            'label':           f'{nome_curto}\n{dna.get_situacao_display()}',
+            'focal':           False,
+            'nome':            dna.nome,
+            'cpf':             dna.cpf   or '—',
+            'rg':              dna.rg    or '—',
+            'situacao':        dna.situacao,
+            'situacao_display': dna.get_situacao_display(),
+            'finalidade':      dna.get_finalidade_coleta_display(),
+            'perito':          dna.perito.nome_completo if dna.perito else '—',
+            'data_coleta':     dna.data_da_coleta.strftime('%d/%m/%Y') if dna.data_da_coleta else '—',
+            'url':             f'dna:{dna.id}',
+        }}
+
+    # ── helpers reutilizáveis ──────────────────────────────────────────────────
+
+    def _adicionar_dnas_vestigio(self, v, nodes, edges):
+        """Adiciona nós DNA ligados ao vestígio e retorna os IDs já adicionados."""
+        for dna in v.dnas.select_related('perito').all():
+            nodes.append(self._nd(dna))
+            edges.append(self._edge(f'vest_{v.id}', f'dna_{dna.id}', 'vestigio_dna'))
+
+    # ── Grafo a partir de um Vestígio ─────────────────────────────────────────
+
+    def _grafo_vestigio(self, pk):
+        com_movimentacoes = self.request.query_params.get('incluir_movimentacoes') == '1'
+
+        try:
+            v = Vestigio.objects.select_related(
+                'unidade_demandante', 'servico_pericial', 'user_destino',
+                'vestigio_contra_prova',
+            ).get(pk=pk)
+        except Vestigio.DoesNotExist:
+            return Response({'detail': 'Vestígio não encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+
+        nodes, edges, seen_procs = [], [], set()
+        nodes.append(self._nv(v, focal=True))
+
+        # ── Ocorrências + procedimentos ────────────────────────────────────────
+        for oc in v.ocorrencias_vinculadas.select_related(
+            'perito_atribuido', 'servico_pericial', 'unidade_demandante',
+            'procedimento_cadastrado__tipo_procedimento',
+        ).all():
+            nodes.append(self._no(oc))
+            edges.append(self._edge(f'oc_{oc.id}', f'vest_{v.id}', 'oc_vestigio'))
+            if oc.procedimento_cadastrado:
+                p = oc.procedimento_cadastrado
+                if p.id not in seen_procs:
+                    nodes.append(self._np(p))
+                    seen_procs.add(p.id)
+                edges.append(self._edge(f'proc_{p.id}', f'oc_{oc.id}', 'proc_ocorrencia'))
+
+        for p in v.procedimentos.select_related('tipo_procedimento').all():
+            if p.id not in seen_procs:
+                nodes.append(self._np(p))
+                seen_procs.add(p.id)
+                edges.append(self._edge(f'proc_{p.id}', f'vest_{v.id}', 'proc_vestigio'))
+
+        # ── Contraprovas ───────────────────────────────────────────────────────
+        if v.vestigio_contra_prova:
+            orig = v.vestigio_contra_prova
+            nodes.append(self._nv(orig))
+            edges.append(self._edge(f'vest_{orig.id}', f'vest_{v.id}', 'contraprova'))
+
+        for cp in Vestigio.objects.filter(
+            vestigio_contra_prova=v
+        ).select_related('unidade_demandante', 'servico_pericial', 'user_destino'):
+            nodes.append(self._nv(cp, subtipo='contraprova'))
+            edges.append(self._edge(f'vest_{v.id}', f'vest_{cp.id}', 'contraprova'))
+
+        # ── DNAs vinculados ao vestígio ────────────────────────────────────────
+        self._adicionar_dnas_vestigio(v, nodes, edges)
+
+        # ── Cadeia de custódia (toggle) ────────────────────────────────────────
+        if com_movimentacoes:
+            movs = VestigioMovimentacao.objects.filter(
+                vestigio=v
+            ).select_related(
+                'unidade_demandante', 'servico_pericial', 'user_destino', 'created_by'
+            ).order_by('created_at')
+
+            prev_id = f'vest_{v.id}'
+            for i, mov in enumerate(movs, start=1):
+                nodes.append(self._nm(mov, i))
+                edges.append(self._edge(prev_id, f'mov_{mov.id}', 'movimentacao'))
+                prev_id = f'mov_{mov.id}'
+
+        return Response({
+            'focal_id':    f'vest_{v.id}',
+            'focal_label': v.lacre or f'Vestígio #{v.id}',
+            'focal_tipo':  'vestigio',
+            'nodes': nodes,
+            'edges': edges,
+        })
+
+    # ── Grafo a partir de uma Ocorrência ──────────────────────────────────────
+
+    def _grafo_ocorrencia(self, pk):
+        from ocorrencias.models import Ocorrencia
+        try:
+            oc = Ocorrencia.objects.select_related(
+                'perito_atribuido', 'servico_pericial', 'unidade_demandante',
+                'procedimento_cadastrado__tipo_procedimento',
+            ).get(pk=pk)
+        except Ocorrencia.DoesNotExist:
+            return Response({'detail': 'Ocorrência não encontrada.'}, status=status.HTTP_404_NOT_FOUND)
+
+        nodes, edges = [], []
+        nodes.append(self._no(oc, focal=True))
+
+        if oc.procedimento_cadastrado:
+            p = oc.procedimento_cadastrado
+            nodes.append(self._np(p))
+            edges.append(self._edge(f'proc_{p.id}', f'oc_{oc.id}', 'proc_ocorrencia'))
+
+            for outra in Ocorrencia.objects.filter(
+                procedimento_cadastrado=p
+            ).exclude(pk=oc.pk).select_related(
+                'perito_atribuido', 'servico_pericial', 'unidade_demandante',
+            ):
+                nodes.append(self._no(outra))
+                edges.append(self._edge(f'proc_{p.id}', f'oc_{outra.id}', 'proc_ocorrencia'))
+
+        for v in oc.vestigios.select_related(
+            'unidade_demandante', 'servico_pericial', 'user_destino',
+        ).all():
+            nodes.append(self._nv(v))
+            edges.append(self._edge(f'oc_{oc.id}', f'vest_{v.id}', 'oc_vestigio'))
+            self._adicionar_dnas_vestigio(v, nodes, edges)
+
+        return Response({
+            'focal_id':    f'oc_{oc.id}',
+            'focal_label': oc.numero_ocorrencia,
+            'focal_tipo':  'ocorrencia',
+            'nodes': nodes,
+            'edges': edges,
+        })
+
+    # ── Grafo a partir de um Procedimento ─────────────────────────────────────
+
+    def _grafo_procedimento(self, pk):
+        from procedimentos_cadastrados.models import ProcedimentoCadastrado
+        from ocorrencias.models import Ocorrencia as OcorrenciaModel
+        try:
+            proc = ProcedimentoCadastrado.objects.select_related('tipo_procedimento').get(pk=pk)
+        except ProcedimentoCadastrado.DoesNotExist:
+            return Response({'detail': 'Procedimento não encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+
+        nodes, edges, seen_vest = [], [], set()
+        nodes.append(self._np(proc, focal=True))
+
+        for oc in OcorrenciaModel.objects.filter(
+            procedimento_cadastrado=proc
+        ).select_related('perito_atribuido', 'servico_pericial', 'unidade_demandante'):
+            nodes.append(self._no(oc))
+            edges.append(self._edge(f'proc_{proc.id}', f'oc_{oc.id}', 'proc_ocorrencia'))
+
+            for v in oc.vestigios.select_related(
+                'unidade_demandante', 'servico_pericial', 'user_destino',
+            ).all():
+                if v.id not in seen_vest:
+                    nodes.append(self._nv(v))
+                    seen_vest.add(v.id)
+                edges.append(self._edge(f'oc_{oc.id}', f'vest_{v.id}', 'oc_vestigio'))
+
+        for v in Vestigio.objects.filter(
+            procedimentos=proc
+        ).select_related('unidade_demandante', 'servico_pericial', 'user_destino'):
+            if v.id not in seen_vest:
+                nodes.append(self._nv(v))
+                seen_vest.add(v.id)
+                self._adicionar_dnas_vestigio(v, nodes, edges)
+                edges.append(self._edge(f'proc_{proc.id}', f'vest_{v.id}', 'proc_vestigio'))
+
+        return Response({
+            'focal_id':    f'proc_{proc.id}',
+            'focal_label': f'{proc.tipo_procedimento.sigla} {proc.numero}/{proc.ano}',
+            'focal_tipo':  'procedimento',
+            'nodes': nodes,
+            'edges': edges,
+        })
+
+
+# ---------------------------------------------------------------------------
 # Resumo de Custódia — widget embutido nos dashboards dos perfis internos
 # ---------------------------------------------------------------------------
 
@@ -976,8 +1380,8 @@ class CustodiaResumoView(APIView):
                     'dnas_total': 0,
                     'transferencias_pendentes': 0,
                 })
-            qs      = _qs_filtro_unidade(qs,      user, 'unidade_demandante',           'user_destino')
-            qs_movs = _qs_filtro_unidade(qs_movs, user, 'vestigio__unidade_demandante', 'vestigio__user_destino')
+            qs      = _qs_filtro_unidade(qs,      user, 'unidade_demandante',           'user_destino',           campo_servico='servico_pericial')
+            qs_movs = _qs_filtro_unidade(qs_movs, user, 'vestigio__unidade_demandante', 'vestigio__user_destino',  campo_servico='vestigio__servico_pericial')
 
         # Filtro por serviço pericial (todos os perfis)
         sp_id = request.query_params.get('servico_pericial_id')

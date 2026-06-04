@@ -42,6 +42,7 @@ from custodia.views import (
     CustodiaResumoView,
     DashboardExternoView,
     DashboardCustodianteView,
+    GrafoRelacoesView,
 )
 
 # =============================================================================
@@ -128,6 +129,12 @@ urlpatterns = [
         "api/custodia/dashboard/custodiante/",
         DashboardCustodianteView.as_view(),
         name="custodia-dashboard-custodiante",
+    ),
+    # Teia de Relações — grafo visual (vestígio / ocorrência / procedimento)
+    path(
+        "api/custodia/grafo/",
+        GrafoRelacoesView.as_view(),
+        name="custodia-grafo",
     ),
     # Autenticação
     path("api-auth/", include("rest_framework.urls")),

@@ -524,12 +524,15 @@ def gerar_ficha_vestigio(vestigio, request):
     # Evento 0 — REGISTRO INICIAL
     origem = str(vestigio.unidade_demandante) if vestigio.unidade_demandante else '—'
     lacre_inicial = vestigio.lacre or '—'
+    # lacre_vigente rastreia o lacre conhecido ao longo da cadeia
+    lacre_vigente = vestigio.lacre
+
     eventos.append({
         'tipo':          'REGISTRO',
         'data_hora':     _formatar_dt(vestigio.created_at),
         'realizado_por': vestigio.get_responsavel(),
-        'de_para':       origem,
-        'observacoes':   f'Entrada inicial. Lacre: {lacre_inicial}',
+        'de_para':       f'{origem}<br/><b>Lacre inicial:</b> {lacre_inicial}',
+        'observacoes':   'Entrada inicial no sistema.',
     })
 
     for mov in movimentacoes:
@@ -553,10 +556,24 @@ def gerar_ficha_vestigio(vestigio, request):
                 'observacoes':   f'Movimentação anulada. {_vazio(mov.descricao)}',
             })
         else:
-            # Evento de TRANSFERÊNCIA — quem movimentou / enviou
-            obs_transf = _vazio(mov.descricao)
+            # ── Rastreio de lacre ──────────────────────────────────────────
+            # Mostra o lacre em De/Para somente quando há lacre na movimentação.
+            # Se o lacre mudou em relação ao vigente, exibe "anterior → novo".
+            # Se é o mesmo, confirma sem indicar alteração.
+            # Se a movimentação não informou lacre, nada é exibido (sem rompimento).
             if mov.lacre:
-                obs_transf = f'Lacre: {mov.lacre} | {obs_transf}'
+                if lacre_vigente and mov.lacre != lacre_vigente:
+                    lacre_linha = (
+                        f'<br/><b>Lacre:</b> {lacre_vigente} → <b>{mov.lacre}</b>'
+                    )
+                else:
+                    lacre_linha = f'<br/><b>Lacre:</b> {mov.lacre}'
+                lacre_vigente = mov.lacre
+            else:
+                lacre_linha = ''
+
+            # Observações: descrição + SEI + autoridade (lacre saiu daqui)
+            obs_transf = _vazio(mov.descricao)
             if mov.num_processo_sei:
                 obs_transf = f'SEI: {mov.num_processo_sei} | {obs_transf}'
             if mov.autoridade:
@@ -566,22 +583,24 @@ def gerar_ficha_vestigio(vestigio, request):
                 'tipo':          'TRANSFERÊNCIA',
                 'data_hora':     _formatar_dt(mov.created_at),
                 'realizado_por': mov.get_responsavel(),
-                'de_para':       f'→ {destino_str}',
+                'de_para':       f'→ {destino_str}{lacre_linha}',
                 'observacoes':   obs_transf,
             })
 
             if mov.aceito:
-                # Evento de ACEITE — quem recebeu / aceitou a custódia
+                # De/Para do ACEITE confirma o lacre recebido (se houver)
                 quem_aceitou = str(mov.user_destino) if mov.user_destino else '—'
+                aceite_lacre = (
+                    f'<br/><b>Lacre confirmado:</b> {mov.lacre}' if mov.lacre else ''
+                )
                 eventos.append({
                     'tipo':          'ACEITE',
                     'data_hora':     _formatar_dt(mov.data_hora_aceito),
                     'realizado_por': quem_aceitou,
-                    'de_para':       destino_str,
+                    'de_para':       f'{destino_str}{aceite_lacre}',
                     'observacoes':   'Recebimento confirmado — custódia transferida',
                 })
             else:
-                # Evento PENDENTE — aguardando aceite
                 destinatario = str(mov.user_destino) if mov.user_destino else '—'
                 eventos.append({
                     'tipo':          'PENDENTE',
@@ -614,8 +633,8 @@ def gerar_ficha_vestigio(vestigio, request):
         Paragraph('De / Para',     st_cab_col),
         Paragraph('Observações',   st_cab_col),
     ]
-    # Larguras: badge(2.4) + data(2.8) + responsável(4.0) + de_para(3.0) + obs(5.2) = 17.4
-    col_w = [2.4 * cm, 2.8 * cm, 4.0 * cm, 3.0 * cm, 5.2 * cm]
+    # Larguras: badge(2.4) + data(2.8) + responsável(3.8) + de_para(4.0) + obs(4.4) = 17.4
+    col_w = [2.4 * cm, 2.8 * cm, 3.8 * cm, 4.0 * cm, 4.4 * cm]
 
     cadeia_rows = [cab_row]
     estilos_linhas = []  # acumula estilos específicos por linha
