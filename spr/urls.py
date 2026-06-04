@@ -43,6 +43,7 @@ from custodia.views import (
     DashboardExternoView,
     DashboardCustodianteView,
     GrafoRelacoesView,
+    AnalyticsCustodiaView,
 )
 
 # =============================================================================
@@ -135,6 +136,12 @@ urlpatterns = [
         "api/custodia/grafo/",
         GrafoRelacoesView.as_view(),
         name="custodia-grafo",
+    ),
+    # Analytics de Custódia — raio X completo
+    path(
+        "api/custodia/analytics/",
+        AnalyticsCustodiaView.as_view(),
+        name="custodia-analytics",
     ),
     # Autenticação
     path("api-auth/", include("rest_framework.urls")),

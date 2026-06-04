@@ -65,7 +65,7 @@ class ServicoResumoSerializer(serializers.ModelSerializer):
 class UsuarioResumoSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'nome_completo', 'email']
+        fields = ['id', 'nome_completo', 'email', 'perfil']
 
 
 class ProcedimentoCadastradoResumoSerializer(serializers.ModelSerializer):
@@ -192,14 +192,14 @@ class VestigioCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Vestigio
         fields = [
-            'id',
+            'id', 'status',
             'lacre', 'num_processo_sei', 'conformidade', 'biologico',
             'ocorrencia', 'ano_ocorrencia', 'descricao',
             'unidade_demandante_id', 'servico_pericial_id', 'autoridade_id',
             'user_destino_id', 'vestigio_contra_prova_id',
             'procedimentos_ids', 'ocorrencias_vinculadas_ids',
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'status']
 
     def validate(self, data):
         """
@@ -333,10 +333,12 @@ class VestigioMovimentacaoCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = VestigioMovimentacao
         fields = [
+            'id',
             'vestigio_id', 'lacre', 'num_processo_sei', 'descricao',
             'unidade_demandante_id', 'servico_pericial_id',
             'autoridade_id', 'user_destino_id',
         ]
+        read_only_fields = ['id']
 
 
 class AceitarMovimentacaoSerializer(serializers.Serializer):
@@ -376,6 +378,7 @@ class DNADetailSerializer(serializers.ModelSerializer):
     perito     = UsuarioResumoSerializer(read_only=True)
     vestigio   = VestigioListSerializer(read_only=True)
     created_by = UsuarioResumoSerializer(read_only=True)
+    updated_by = UsuarioResumoSerializer(read_only=True)
     finalidade_coleta_display = serializers.CharField(source='get_finalidade_coleta_display', read_only=True)
     situacao_display          = serializers.CharField(source='get_situacao_display', read_only=True)
     gemeo_display             = serializers.CharField(source='get_gemeo_display', read_only=True)

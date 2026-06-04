@@ -1,7 +1,9 @@
 # custodia/views.py
 
 from django.utils import timezone
-from django.db.models import Count, Q
+from datetime import timedelta
+from django.db.models import Count, Q, Max
+from django.db.models.functions import TruncMonth
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.filters import SearchFilter, OrderingFilter
@@ -1526,4 +1528,297 @@ class DashboardCustodianteView(APIView):
             'movimentacoes_recentes': VestigioMovimentacaoListSerializer(
                 movs_recentes, many=True
             ).data,
+        })
+
+
+# ---------------------------------------------------------------------------
+# Analytics de Custódia — raio X completo (sessão 9)
+# ---------------------------------------------------------------------------
+
+class AnalyticsCustodiaView(APIView):
+    """
+    Dashboard analytics completo do módulo de custódia.
+
+    Retorna KPIs, cards de status com drill-down, gráficos,
+    matriz serviço × status e alertas operacionais.
+
+    Filtros: data_inicio, data_fim, servico_pericial_id
+    Permissão: PodeCustodiar (todos exceto EXTERNO)
+    """
+    permission_classes = [PodeCustodiar]
+
+    def get(self, request):
+        def safe_int(val):
+            try:
+                return int(val) if val not in ['null', '', None] else None
+            except Exception:
+                return None
+
+        data_inicio   = request.GET.get('data_inicio')
+        data_fim      = request.GET.get('data_fim')
+        servico_id    = safe_int(request.GET.get('servico_pericial_id'))
+
+        # -------------------------------------------------------------------
+        # Querysets base com filtros
+        # -------------------------------------------------------------------
+        qs = Vestigio.objects.all()
+        qs_dna = DNA.objects.all()
+
+        if data_inicio:
+            qs     = qs.filter(created_at__date__gte=data_inicio)
+            qs_dna = qs_dna.filter(created_at__date__gte=data_inicio)
+        if data_fim:
+            qs     = qs.filter(created_at__date__lte=data_fim)
+            qs_dna = qs_dna.filter(created_at__date__lte=data_fim)
+        if servico_id:
+            qs = qs.filter(servico_pericial_id=servico_id)
+
+        total = qs.count() or 1  # evitar divisão por zero
+
+        # -------------------------------------------------------------------
+        # KPIs
+        # -------------------------------------------------------------------
+        total_vestigios    = qs.count()
+        vestigios_ativos   = qs.filter(status__in=[Vestigio.Status.INICIAL, Vestigio.Status.ANDAMENTO]).count()
+        aguardando_aceite  = VestigioMovimentacao.objects.filter(aceito=False).count()
+        total_dnas         = qs_dna.count()
+        biologicos_ativos  = qs.filter(biologico=True, status__in=[Vestigio.Status.INICIAL, Vestigio.Status.ANDAMENTO]).count()
+        saiu_custodia      = qs.filter(status=Vestigio.Status.FINALIZADO, saiu_da_custodia=True).count()
+
+        agora = timezone.now()
+        finalizados_mes = Vestigio.objects.filter(
+            status=Vestigio.Status.FINALIZADO,
+            updated_at__year=agora.year,
+            updated_at__month=agora.month,
+        ).count()
+
+        # -------------------------------------------------------------------
+        # Cards de status com drill-down por serviço pericial
+        # -------------------------------------------------------------------
+        cards_status = []
+        for s_val, label, icon in [
+            (Vestigio.Status.INICIAL,    'Iniciais',      'bi-box-seam'),
+            (Vestigio.Status.ANDAMENTO,  'Em Andamento',  'bi-arrow-left-right'),
+            (Vestigio.Status.FINALIZADO, 'Finalizados',   'bi-check-circle-fill'),
+        ]:
+            qtd = qs.filter(status=s_val).count()
+            por_servico = (
+                qs.filter(status=s_val)
+                .values('servico_pericial__sigla', 'servico_pericial__nome')
+                .annotate(quantidade=Count('id'))
+                .order_by('-quantidade')
+            )
+            cards_status.append({
+                'status':     s_val,
+                'label':      label,
+                'icon':       icon,
+                'quantidade': qtd,
+                'percentual': round(qtd / total * 100, 1),
+                'por_servico': [
+                    {
+                        'sigla':      i['servico_pericial__sigla'] or '?',
+                        'nome':       i['servico_pericial__nome'] or 'N/I',
+                        'quantidade': i['quantidade'],
+                    }
+                    for i in por_servico
+                ],
+            })
+
+        # -------------------------------------------------------------------
+        # Gráficos
+        # -------------------------------------------------------------------
+
+        # Vestígios por serviço pericial
+        por_servico = (
+            qs.values('servico_pericial__sigla', 'servico_pericial__nome')
+            .annotate(quantidade=Count('id'))
+            .order_by('-quantidade')[:10]
+        )
+
+        # Vestígios por unidade demandante
+        por_unidade = (
+            qs.values('unidade_demandante__sigla', 'unidade_demandante__nome')
+            .annotate(quantidade=Count('id'))
+            .order_by('-quantidade')[:10]
+        )
+
+        # Evolução mensal — cadastros
+        por_mes_cadastro = (
+            qs.filter(created_at__isnull=False)
+            .annotate(mes=TruncMonth('created_at'))
+            .values('mes')
+            .annotate(quantidade=Count('id'))
+            .order_by('mes')
+        )
+
+        # Evolução mensal — finalizações (independente do filtro de serviço para ter contexto global)
+        qs_final = Vestigio.objects.filter(status=Vestigio.Status.FINALIZADO, updated_at__isnull=False)
+        if data_inicio:
+            qs_final = qs_final.filter(updated_at__date__gte=data_inicio)
+        if data_fim:
+            qs_final = qs_final.filter(updated_at__date__lte=data_fim)
+        if servico_id:
+            qs_final = qs_final.filter(servico_pericial_id=servico_id)
+
+        por_mes_finalizacao = (
+            qs_final
+            .annotate(mes=TruncMonth('updated_at'))
+            .values('mes')
+            .annotate(quantidade=Count('id'))
+            .order_by('mes')
+        )
+
+        # Biológico vs não-biológico
+        por_biologico = [
+            {'label': 'Biológico',     'quantidade': qs.filter(biologico=True).count()},
+            {'label': 'Não Biológico', 'quantidade': qs.filter(biologico=False).count()},
+        ]
+
+        # Conformidade
+        por_conformidade = [
+            {'label': 'Conforme',     'quantidade': qs.filter(conformidade=True).count()},
+            {'label': 'Não Conforme', 'quantidade': qs.filter(conformidade=False).count()},
+        ]
+
+        # Movimentações por mês
+        qs_mov_mes = VestigioMovimentacao.objects.filter(created_at__isnull=False)
+        if data_inicio:
+            qs_mov_mes = qs_mov_mes.filter(created_at__date__gte=data_inicio)
+        if data_fim:
+            qs_mov_mes = qs_mov_mes.filter(created_at__date__lte=data_fim)
+
+        por_mes_mov = (
+            qs_mov_mes
+            .annotate(mes=TruncMonth('created_at'))
+            .values('mes')
+            .annotate(quantidade=Count('id'))
+            .order_by('mes')
+        )
+
+        # DNA por situação
+        dna_por_situacao = (
+            qs_dna.values('situacao')
+            .annotate(quantidade=Count('id'))
+            .order_by('-quantidade')
+        )
+
+        # DNA por finalidade de coleta
+        dna_por_finalidade = (
+            qs_dna.values('finalidade_coleta')
+            .annotate(quantidade=Count('id'))
+            .order_by('-quantidade')
+        )
+
+        # DNA por mês
+        dna_por_mes = (
+            qs_dna.filter(created_at__isnull=False)
+            .annotate(mes=TruncMonth('created_at'))
+            .values('mes')
+            .annotate(quantidade=Count('id'))
+            .order_by('mes')
+        )
+
+        # Matriz Serviço × Status
+        matriz_raw = (
+            Vestigio.objects.values('servico_pericial__sigla', 'status')
+            .annotate(quantidade=Count('id'))
+            .order_by('servico_pericial__sigla', 'status')
+        )
+        matriz_servico_status = [
+            {
+                'servico':    i['servico_pericial__sigla'] or '?',
+                'status':     i['status'],
+                'quantidade': i['quantidade'],
+            }
+            for i in matriz_raw
+        ]
+
+        # -------------------------------------------------------------------
+        # Alertas operacionais
+        # -------------------------------------------------------------------
+        limite_mov  = agora - timedelta(days=7)
+        limite_vest = agora - timedelta(days=30)
+
+        movs_pendentes = (
+            VestigioMovimentacao.objects.filter(aceito=False, created_at__lte=limite_mov)
+            .select_related('vestigio', 'servico_pericial', 'created_by')
+            .order_by('created_at')[:20]
+        )
+
+        vest_parados = (
+            Vestigio.objects.filter(
+                status=Vestigio.Status.ANDAMENTO,
+                updated_at__lte=limite_vest,
+            )
+            .select_related('servico_pericial', 'user_destino')
+            .order_by('updated_at')[:20]
+        )
+
+        # -------------------------------------------------------------------
+        # Resposta
+        # -------------------------------------------------------------------
+        def _fmt_mes(m):
+            return {'mes': m['mes'].strftime('%Y-%m'), 'mes_nome': m['mes'].strftime('%b/%Y'), 'quantidade': m['quantidade']}
+
+        return Response({
+            'resumo': {
+                'total_vestigios':   total_vestigios,
+                'vestigios_ativos':  vestigios_ativos,
+                'aguardando_aceite': aguardando_aceite,
+                'finalizados_mes':   finalizados_mes,
+                'total_dnas':        total_dnas,
+                'biologicos_ativos': biologicos_ativos,
+                'saiu_custodia':     saiu_custodia,
+            },
+            'cards_status': cards_status,
+            'graficos': {
+                'por_servico': [
+                    {'sigla': i['servico_pericial__sigla'] or '?', 'nome': i['servico_pericial__nome'] or 'N/I', 'quantidade': i['quantidade']}
+                    for i in por_servico
+                ],
+                'por_unidade': [
+                    {'sigla': i['unidade_demandante__sigla'] or '?', 'nome': i['unidade_demandante__nome'] or 'N/I', 'quantidade': i['quantidade']}
+                    for i in por_unidade
+                ],
+                'por_mes_cadastro':    [_fmt_mes(i) for i in por_mes_cadastro if i['mes']],
+                'por_mes_finalizacao': [_fmt_mes(i) for i in por_mes_finalizacao if i['mes']],
+                'por_mes_mov':         [_fmt_mes(i) for i in por_mes_mov if i['mes']],
+                'por_biologico':       por_biologico,
+                'por_conformidade':    por_conformidade,
+                'dna_por_situacao': [
+                    {'label': i['situacao'] or 'N/I', 'quantidade': i['quantidade']}
+                    for i in dna_por_situacao
+                ],
+                'dna_por_finalidade': [
+                    {'label': i['finalidade_coleta'] or 'N/I', 'quantidade': i['quantidade']}
+                    for i in dna_por_finalidade
+                ],
+                'dna_por_mes':            [_fmt_mes(i) for i in dna_por_mes if i['mes']],
+                'matriz_servico_status':  matriz_servico_status,
+            },
+            'alertas': {
+                'movimentacoes_pendentes': [
+                    {
+                        'id':             m.pk,
+                        'vestigio_id':    m.vestigio_id,
+                        'vestigio_lacre': m.vestigio.lacre if m.vestigio else None,
+                        'servico':        m.servico_pericial.sigla if m.servico_pericial else '?',
+                        'registrado_por': m.created_by.nome_completo if m.created_by else '?',
+                        'criado_em':      m.created_at.isoformat() if m.created_at else None,
+                        'dias_pendente':  (agora - m.created_at).days if m.created_at else 0,
+                    }
+                    for m in movs_pendentes
+                ],
+                'vestigios_parados': [
+                    {
+                        'id':                 v.pk,
+                        'lacre':              v.lacre,
+                        'servico':            v.servico_pericial.sigla if v.servico_pericial else '?',
+                        'responsavel':        v.user_destino.nome_completo if v.user_destino else 'N/A',
+                        'ultima_atualizacao': v.updated_at.isoformat() if v.updated_at else None,
+                        'dias_parado':        (agora - v.updated_at).days if v.updated_at else 0,
+                    }
+                    for v in vest_parados
+                ],
+            },
         })

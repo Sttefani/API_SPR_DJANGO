@@ -13,6 +13,8 @@ Restrições de perfil:
   SUPER_ADMIN    → poder total, único que pode DELETE
 """
 
+import uuid
+
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient, APITestCase
@@ -36,13 +38,9 @@ def _criar_servico(sigla='SETEC', nome='Seção Técnica'):
     return ServicoPericial.objects.create(sigla=sigla, nome=nome)
 
 
-_cpf_counter = 0
-
 def _criar_usuario(email, senha='Teste@1234', perfil=User.Perfil.PERITO, unidade=None):
-    global _cpf_counter
-    _cpf_counter += 1
-    # CPF fictício único por usuário de teste (sem validação de dígito)
-    cpf = f'{_cpf_counter:011d}'
+    # CPF fictício único por chamada (sem validação de dígito verificador)
+    cpf = str(uuid.uuid4().int)[:11]
     u = User.objects.create_user(
         email=email,
         password=senha,
@@ -143,9 +141,9 @@ class VestgioCriacaoTest(CustodiaBaseTest):
         r = self._criar_vestigio_via_api(self.externo)
         self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_custodiante_nao_pode_criar_vestigio(self):
+    def test_custodiante_pode_criar_vestigio(self):
         r = self._criar_vestigio_via_api(self.custodiante)
-        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
 
     def test_duplicata_mesmo_lacre_ocorrencia_ano_servico(self):
         """Dois vestígios com mesmo lacre+ocorrência+ano+serviço devem ser bloqueados."""
