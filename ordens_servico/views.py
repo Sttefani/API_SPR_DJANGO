@@ -1027,20 +1027,28 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
 
         # 8. EVOLUÇÃO TEMPORAL
         doze_meses_atras = timezone.now().date() - timedelta(days=365)
-        evolucao_temporal = (
+
+        # OS criadas por mês (bucket do eixo X)
+        evolucao_criadas = (
             queryset_filtrado.filter(created_at__date__gte=doze_meses_atras)
-            .annotate(
-                # ✅✅✅ CORREÇÃO APLICADA AQUI ✅✅✅
-                mes=TruncDate(
-                    "created_at", kind="month", output_field=DateField()
-                )  # Usa kind='month'
-            )
+            .annotate(mes=TruncDate("created_at", kind="month", output_field=DateField()))
             .values("mes")
-            .annotate(
-                total=Count("id"), concluidas=Count("id", filter=Q(status="CONCLUIDA"))
-            )
+            .annotate(total=Count("id"))
             .order_by("mes")
         )
+
+        # OS concluídas por mês — agrupadas por data_conclusao (quando foram realmente baixadas)
+        evolucao_concluidas = (
+            queryset_filtrado.filter(
+                status="CONCLUIDA",
+                data_conclusao__isnull=False,
+                data_conclusao__date__gte=doze_meses_atras,
+            )
+            .annotate(mes=TruncDate("data_conclusao", kind="month", output_field=DateField()))
+            .values("mes")
+            .annotate(concluidas=Count("id"))
+        )
+        concluidas_por_mes = {item["mes"]: item["concluidas"] for item in evolucao_concluidas}
 
         return Response(
             {
@@ -1055,9 +1063,9 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
                     {
                         "mes": item["mes"].isoformat(),
                         "total": item["total"],
-                        "concluidas": item["concluidas"],
+                        "concluidas": concluidas_por_mes.get(item["mes"], 0),
                     }
-                    for item in evolucao_temporal
+                    for item in evolucao_criadas
                 ],
             }
         )

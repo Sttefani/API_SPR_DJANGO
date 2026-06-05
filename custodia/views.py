@@ -1085,7 +1085,7 @@ class GrafoRelacoesView(APIView):
     # ── Builders de nós ──────────────────────────────────────────────────────
 
     @staticmethod
-    def _nv(v, focal=False, subtipo='vestigio'):
+    def _nv(v, focal=False, subtipo='vestigio', acessivel=True):
         label = f'{v.lacre}\n#{v.id}' if v.lacre else f'#{v.id}'
         # Procedimentos diretamente vinculados ao vestígio (M2M direto, sem ocorrência)
         procs_diretos = [
@@ -1105,6 +1105,7 @@ class GrafoRelacoesView(APIView):
             'biologico':           v.biologico,
             'url':                 f'vestigio:{v.id}',
             'procedimentos_diretos': procs_diretos,
+            'acessivel':           acessivel,
         }}
 
     @staticmethod
@@ -1184,6 +1185,24 @@ class GrafoRelacoesView(APIView):
 
     # ── helpers reutilizáveis ──────────────────────────────────────────────────
 
+    def _get_ids_acessiveis(self):
+        """
+        Retorna o conjunto de IDs de vestígios que o usuário corrente pode abrir
+        (mesma lógica do VestigioViewSet.get_queryset).
+        ADMINISTRATIVO e SUPER_ADMIN têm acesso total → retorna None.
+        """
+        user = self.request.user
+        if user.perfil in {User.Perfil.ADMINISTRATIVO, User.Perfil.SUPER_ADMIN} or user.is_superuser:
+            return None
+        qs = _qs_filtro_unidade(
+            Vestigio.objects.only('id'), user,
+            campo_unidade='unidade_demandante',
+            campo_destino='user_destino',
+            campo_criado_por='created_by',
+            campo_servico='servico_pericial',
+        )
+        return set(qs.values_list('id', flat=True))
+
     def _adicionar_dnas_vestigio(self, v, nodes, edges):
         """Adiciona nós DNA ligados ao vestígio e retorna os IDs já adicionados."""
         for dna in v.dnas.select_related('perito').all():
@@ -1203,8 +1222,11 @@ class GrafoRelacoesView(APIView):
         except Vestigio.DoesNotExist:
             return Response({'detail': 'Vestígio não encontrado.'}, status=status.HTTP_404_NOT_FOUND)
 
+        ids_acessiveis = self._get_ids_acessiveis()
+        pode_ver = lambda vid: ids_acessiveis is None or vid in ids_acessiveis
+
         nodes, edges, seen_procs = [], [], set()
-        nodes.append(self._nv(v, focal=True))
+        nodes.append(self._nv(v, focal=True))  # focal: sempre acessível (usuário abriu)
 
         # ── Ocorrências + procedimentos ────────────────────────────────────────
         for oc in v.ocorrencias_vinculadas.select_related(
@@ -1229,13 +1251,13 @@ class GrafoRelacoesView(APIView):
         # ── Contraprovas ───────────────────────────────────────────────────────
         if v.vestigio_contra_prova:
             orig = v.vestigio_contra_prova
-            nodes.append(self._nv(orig))
+            nodes.append(self._nv(orig, acessivel=pode_ver(orig.id)))
             edges.append(self._edge(f'vest_{orig.id}', f'vest_{v.id}', 'contraprova'))
 
         for cp in Vestigio.objects.filter(
             vestigio_contra_prova=v
         ).select_related('unidade_demandante', 'servico_pericial', 'user_destino'):
-            nodes.append(self._nv(cp, subtipo='contraprova'))
+            nodes.append(self._nv(cp, subtipo='contraprova', acessivel=pode_ver(cp.id)))
             edges.append(self._edge(f'vest_{v.id}', f'vest_{cp.id}', 'contraprova'))
 
         # ── DNAs vinculados ao vestígio ────────────────────────────────────────
@@ -1275,6 +1297,9 @@ class GrafoRelacoesView(APIView):
         except Ocorrencia.DoesNotExist:
             return Response({'detail': 'Ocorrência não encontrada.'}, status=status.HTTP_404_NOT_FOUND)
 
+        ids_acessiveis = self._get_ids_acessiveis()
+        pode_ver = lambda vid: ids_acessiveis is None or vid in ids_acessiveis
+
         nodes, edges = [], []
         nodes.append(self._no(oc, focal=True))
 
@@ -1294,7 +1319,7 @@ class GrafoRelacoesView(APIView):
         for v in oc.vestigios.select_related(
             'unidade_demandante', 'servico_pericial', 'user_destino',
         ).all():
-            nodes.append(self._nv(v))
+            nodes.append(self._nv(v, acessivel=pode_ver(v.id)))
             edges.append(self._edge(f'oc_{oc.id}', f'vest_{v.id}', 'oc_vestigio'))
             self._adicionar_dnas_vestigio(v, nodes, edges)
 
@@ -1316,6 +1341,9 @@ class GrafoRelacoesView(APIView):
         except ProcedimentoCadastrado.DoesNotExist:
             return Response({'detail': 'Procedimento não encontrado.'}, status=status.HTTP_404_NOT_FOUND)
 
+        ids_acessiveis = self._get_ids_acessiveis()
+        pode_ver = lambda vid: ids_acessiveis is None or vid in ids_acessiveis
+
         nodes, edges, seen_vest = [], [], set()
         nodes.append(self._np(proc, focal=True))
 
@@ -1329,7 +1357,7 @@ class GrafoRelacoesView(APIView):
                 'unidade_demandante', 'servico_pericial', 'user_destino',
             ).all():
                 if v.id not in seen_vest:
-                    nodes.append(self._nv(v))
+                    nodes.append(self._nv(v, acessivel=pode_ver(v.id)))
                     seen_vest.add(v.id)
                 edges.append(self._edge(f'oc_{oc.id}', f'vest_{v.id}', 'oc_vestigio'))
 
@@ -1337,7 +1365,7 @@ class GrafoRelacoesView(APIView):
             procedimentos=proc
         ).select_related('unidade_demandante', 'servico_pericial', 'user_destino'):
             if v.id not in seen_vest:
-                nodes.append(self._nv(v))
+                nodes.append(self._nv(v, acessivel=pode_ver(v.id)))
                 seen_vest.add(v.id)
                 self._adicionar_dnas_vestigio(v, nodes, edges)
                 edges.append(self._edge(f'proc_{proc.id}', f'vest_{v.id}', 'proc_vestigio'))
