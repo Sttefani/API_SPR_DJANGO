@@ -198,13 +198,18 @@ class VestigioViewSet(viewsets.ModelViewSet):
         # Deleção restrita a SUPER_ADMIN — o Java original não tinha DELETE em vestígios
         if self.action == 'destroy':
             return [IsSuperAdmin()]
-        if self.action in ('create', 'update', 'partial_update',
-                            'finalizar', 'reabrir'):
+        # Editar, finalizar e reabrir exigem PodeCustodiar (EXTERNO não pode)
+        if self.action in ('update', 'partial_update', 'finalizar', 'reabrir'):
             return [PodeCustodiar()]
+        # Criar: EXTERNO também pode (registra vestígios da própria unidade)
         return [PodeVerCustodia()]
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        kwargs = {'created_by': self.request.user}
+        # EXTERNO: força unidade_demandante para a unidade do próprio usuário
+        if _is_externo(self.request.user) and self.request.user.unidade_demandante:
+            kwargs['unidade_demandante'] = self.request.user.unidade_demandante
+        serializer.save(**kwargs)
 
     def perform_update(self, serializer):
         instance = serializer.instance  # já carregado pelo update() do DRF — sem double-fetch

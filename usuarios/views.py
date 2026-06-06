@@ -209,16 +209,24 @@ class UserManagementViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Filtra apenas os números do CPF (remove pontos e traços)
+        # Normaliza: remove pontos, traços e espaços
         cpf_limpo = "".join(filter(str.isdigit, cpf))
 
+        # Tenta as duas formas possíveis de armazenamento (com e sem formatação)
+        cpf_formatado = (
+            f"{cpf_limpo[:3]}.{cpf_limpo[3:6]}.{cpf_limpo[6:9]}-{cpf_limpo[9:]}"
+            if len(cpf_limpo) == 11
+            else cpf_limpo
+        )
+
+        from django.db.models import Q
         try:
-            user = User.objects.get(cpf=cpf_limpo)
+            user = User.objects.get(Q(cpf=cpf_limpo) | Q(cpf=cpf_formatado))
             return Response({
                 "id": user.id,
                 "nome_completo": user.nome_completo,
                 "perfil": user.perfil,
-                "matricula": getattr(user, "matricula", "")
+                "matricula": "",
             })
         except User.DoesNotExist:
             return Response(None, status=status.HTTP_404_NOT_FOUND)
