@@ -68,6 +68,7 @@ INSTALLED_APPS = [
     'ordens_servico',
     'auditlog',
     'custodia',
+    'protocolos',
 ]
 
 MIDDLEWARE = [

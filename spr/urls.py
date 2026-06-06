@@ -45,6 +45,7 @@ from custodia.views import (
     GrafoRelacoesView,
     AnalyticsCustodiaView,
 )
+from protocolos.views import ProtocoloEntregaViewSet
 
 # =============================================================================
 # ROTEADOR NÍVEL 1 (PRINCIPAL)
@@ -76,6 +77,7 @@ router.register(r"ordens-servico", OrdemServicoViewSet, basename="ordens-servico
 router.register(r"custodia/vestigios", VestigioViewSet, basename="vestigio")
 router.register(r"custodia/movimentacoes", VestigioMovimentacaoViewSet, basename="vestigio-movimentacao")
 router.register(r"custodia/dnas", DNAViewSet, basename="dna")
+router.register(r"protocolos", ProtocoloEntregaViewSet, basename="protocolo")
 
 # =============================================================================
 # ROTEADORES ANINHADOS

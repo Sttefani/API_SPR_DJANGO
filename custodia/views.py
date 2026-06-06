@@ -1489,6 +1489,12 @@ class DashboardExternoView(APIView):
             'autoridade', 'user_destino', 'created_by',
         ).order_by('-created_at')[:5]
 
+        limite_parado = timezone.now() - timedelta(days=30)
+        vestigios_parados = vestigios.filter(
+            status__in=[Vestigio.Status.INICIAL, Vestigio.Status.ANDAMENTO],
+            updated_at__lt=limite_parado,
+        ).count()
+
         return Response({
             'unidade': UnidadeResumoSerializer(ud).data,
             'vestigios': {
@@ -1504,6 +1510,7 @@ class DashboardExternoView(APIView):
             ).data,
             'alertas': {
                 'transferencias_pendentes': movimentacoes.filter(aceito=False).count(),
+                'vestigios_parados': vestigios_parados,
             },
         })
 

@@ -1,5 +1,3 @@
-# usuarios/views.py
-
 import logging
 from rest_framework import viewsets, mixins, status
 
@@ -192,6 +190,38 @@ class UserManagementViewSet(
             {"status": f"Usuário {user.nome_completo} reativado para aprovação."},
             status=status.HTTP_200_OK,
         )
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="buscar-por-cpf",
+        permission_classes=[IsAuthenticated],
+    )
+    def buscar_por_cpf(self, request):
+        """
+        Busca dados simplificados de um usuário baseado em seu CPF.
+        Aberto a qualquer perfil autenticado (ex: Custodiante) para autocompletar.
+        """
+        cpf = request.query_params.get("cpf", "").strip()
+        if not cpf:
+            return Response(
+                {"error": "CPF não fornecido."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Filtra apenas os números do CPF (remove pontos e traços)
+        cpf_limpo = "".join(filter(str.isdigit, cpf))
+
+        try:
+            user = User.objects.get(cpf=cpf_limpo)
+            return Response({
+                "id": user.id,
+                "nome_completo": user.nome_completo,
+                "perfil": user.perfil,
+                "matricula": getattr(user, "matricula", "")
+            })
+        except User.DoesNotExist:
+            return Response(None, status=status.HTTP_404_NOT_FOUND)
 
 
 class ChangePasswordView(APIView):
