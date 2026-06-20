@@ -118,8 +118,9 @@ class VestigioDetailSerializer(serializers.ModelSerializer):
     )
     status_display = serializers.CharField(source='get_status_display', read_only=True)
 
-    registrado_por = serializers.SerializerMethodField()
-    atualizado_por = serializers.SerializerMethodField()
+    registrado_por  = serializers.SerializerMethodField()
+    atualizado_por  = serializers.SerializerMethodField()
+    pode_movimentar = serializers.SerializerMethodField()
 
     def get_registrado_por(self, obj):
         return obj.get_responsavel()
@@ -128,6 +129,45 @@ class VestigioDetailSerializer(serializers.ModelSerializer):
         if obj.updated_by:
             return obj.updated_by.nome_completo
         return None
+
+    def get_pode_movimentar(self, obj):
+        """
+        True se o usuário atual pode registrar nova movimentação neste vestígio.
+        Replica a lógica combinada de _pode_ter_nova_movimentacao +
+        _posso_realizar_movimentacao do VestigioMovimentacaoViewSet.
+        """
+        if obj.status == 'FINALIZADO':
+            return False
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        if user.perfil == 'EXTERNO':
+            return False
+
+        ultima = VestigioMovimentacao.objects.filter(
+            vestigio=obj
+        ).order_by('-created_at').first()
+
+        # Bloqueia se há movimentação pendente
+        if ultima is not None and not ultima.aceito:
+            return False
+
+        # Admin sempre podem (quando não há pendente)
+        if getattr(user, 'is_superuser', False) or user.perfil in {'ADMINISTRATIVO', 'SUPER_ADMIN'}:
+            return True
+
+        # Primeira movimentação ou CUSTODIANTE: qualquer perfil autorizado pode
+        if ultima is None or user.perfil == 'CUSTODIANTE':
+            return True
+
+        # Após aceite: apenas user_destino ou quem está no serviço de destino
+        if ultima.user_destino_id == user.pk:
+            return True
+        if ultima.servico_pericial_id:
+            return user.servicos_periciais.filter(id=ultima.servico_pericial_id).exists()
+
+        return False
 
     class Meta:
         model = Vestigio
@@ -139,7 +179,7 @@ class VestigioDetailSerializer(serializers.ModelSerializer):
             'user_destino', 'procedimentos', 'ocorrencias_vinculadas',
             'vestigio_contra_prova', 'vestigio_contra_prova_lacre',
             'created_by', 'updated_by', 'registrado_por', 'atualizado_por',
-            'created_at', 'updated_at',
+            'created_at', 'updated_at', 'pode_movimentar',
         ]
 
 
@@ -285,10 +325,40 @@ class VestigioMovimentacaoListSerializer(serializers.ModelSerializer):
     autoridade_nome    = serializers.CharField(source='autoridade.nome', read_only=True)
     user_destino       = UsuarioResumoSerializer(read_only=True)
     # Usa get_responsavel() — prioriza created_by, cai para responsavel_nome (ETL)
-    criado_por         = serializers.SerializerMethodField()
+    criado_por    = serializers.SerializerMethodField()
+    pode_aceitar  = serializers.SerializerMethodField()
+    sou_o_emissor = serializers.SerializerMethodField()
 
     def get_criado_por(self, obj):
         return obj.get_responsavel()
+
+    def get_sou_o_emissor(self, obj):
+        """True se o usuário autenticado foi quem criou esta movimentação."""
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        return obj.created_by_id == request.user.pk
+
+    def get_pode_aceitar(self, obj):
+        """Replica exata da lógica do action aceitar() — só o destinatário/admin pode aceitar."""
+        if obj.aceito:
+            return False
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        if getattr(user, 'is_superuser', False) or user.perfil in {'ADMINISTRATIVO', 'SUPER_ADMIN'}:
+            return True
+        # CUSTODIANTE pode aceitar, mas nunca a sua própria movimentação (ele é o emissor)
+        if user.perfil == 'CUSTODIANTE':
+            return obj.created_by_id != user.pk
+        # Quem está no serviço de destino pode aceitar (lógica Java isMesmoServicoPericial)
+        if obj.servico_pericial_id:
+            return user.servicos_periciais.filter(id=obj.servico_pericial_id).exists()
+        # EXTERNO da mesma unidade demandante
+        if user.perfil == 'EXTERNO' and obj.unidade_demandante_id and user.unidade_demandante_id:
+            return obj.unidade_demandante_id == user.unidade_demandante_id
+        return False
 
     class Meta:
         model = VestigioMovimentacao
@@ -296,7 +366,7 @@ class VestigioMovimentacaoListSerializer(serializers.ModelSerializer):
             'id', 'vestigio', 'lacre', 'num_processo_sei', 'descricao',
             'aceito', 'data_hora_aceito',
             'unidade_demandante', 'servico_pericial', 'autoridade_nome',
-            'user_destino', 'criado_por', 'created_at',
+            'user_destino', 'criado_por', 'created_at', 'pode_aceitar', 'sou_o_emissor',
         ]
 
 

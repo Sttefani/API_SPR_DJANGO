@@ -319,7 +319,7 @@ class VestigioViewSet(viewsets.ModelViewSet):
             created_by=user,
         )
 
-        return Response(VestigioDetailSerializer(vestigio).data)
+        return Response(VestigioDetailSerializer(vestigio, context={'request': request}).data)
 
     @action(detail=True, methods=['post'], url_path='reabrir')
     def reabrir(self, request, pk=None):
@@ -328,7 +328,7 @@ class VestigioViewSet(viewsets.ModelViewSet):
         vestigio.saiu_da_custodia = False
         vestigio.updated_by = request.user
         vestigio.save()
-        return Response(VestigioDetailSerializer(vestigio).data)
+        return Response(VestigioDetailSerializer(vestigio, context={'request': request}).data)
 
     @action(detail=True, methods=['patch'], url_path='salvar-ocorrencia')
     def salvar_ocorrencia(self, request, pk=None):
@@ -352,7 +352,7 @@ class VestigioViewSet(viewsets.ModelViewSet):
         vestigio.ocorrencia = ocorrencia
         vestigio.updated_by = request.user
         vestigio.save()
-        return Response(VestigioDetailSerializer(vestigio).data)
+        return Response(VestigioDetailSerializer(vestigio, context={'request': request}).data)
 
     @action(detail=True, methods=['get'], url_path='movimentacoes')
     def movimentacoes(self, request, pk=None):
@@ -363,7 +363,7 @@ class VestigioViewSet(viewsets.ModelViewSet):
             'unidade_demandante', 'servico_pericial',
             'autoridade', 'user_destino', 'created_by',
         ).order_by('-created_at')
-        serializer = VestigioMovimentacaoListSerializer(movs, many=True)
+        serializer = VestigioMovimentacaoListSerializer(movs, many=True, context={'request': request})
         return Response(serializer.data)
 
     @action(detail=True, methods=['get'], url_path='dnas')
@@ -668,6 +668,26 @@ class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
                 campo_destino='vestigio__user_destino',
                 campo_servico='vestigio__servico_pericial',
             )
+
+        # Filtro especial: ?aguardando_meu_aceite=true
+        # Retorna apenas movimentações pendentes que o usuário atual pode aceitar,
+        # replicando a lógica de get_pode_aceitar() do serializer no lado do banco.
+        if self.request.query_params.get('aguardando_meu_aceite') == 'true':
+            qs = qs.filter(aceito=False)
+            if not (user.is_superuser or user.perfil in {
+                User.Perfil.ADMINISTRATIVO, User.Perfil.SUPER_ADMIN
+            }):
+                if user.perfil == User.Perfil.CUSTODIANTE:
+                    qs = qs.exclude(created_by=user)
+                elif user.perfil in {User.Perfil.PERITO, User.Perfil.OPERACIONAL}:
+                    servicos_ids = user.servicos_periciais.values_list('id', flat=True)
+                    qs = qs.filter(
+                        Q(servico_pericial__in=servicos_ids) | Q(user_destino=user)
+                    )
+                elif user.perfil == User.Perfil.EXTERNO and user.unidade_demandante_id:
+                    qs = qs.filter(unidade_demandante=user.unidade_demandante)
+                else:
+                    qs = qs.none()
 
         return qs
 

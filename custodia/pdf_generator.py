@@ -31,6 +31,12 @@ CINZA_CLARO    = colors.HexColor('#f8fafc')
 BORDAS         = colors.HexColor('#cbd5e1')
 BRANCO         = colors.white
 
+# Alerta de não-conformidade
+ALERTA_FUNDO   = colors.HexColor('#7f1d1d')   # vermelho escuro (header do box)
+ALERTA_CORPO   = colors.HexColor('#fee2e2')    # vermelho claro (corpo do box)
+ALERTA_BORDA   = colors.HexColor('#dc2626')    # vermelho (bordas)
+ALERTA_TEXTO   = colors.HexColor('#dc2626')    # vermelho (texto inline)
+
 
 # ─── Utilitários ─────────────────────────────────────────────────────────────
 
@@ -130,6 +136,67 @@ def _estilos():
             textColor=CINZA_MEDIO, alignment=TA_CENTER, leading=10,
         ),
     }
+
+
+# ─── Alerta de Não-Conformidade ──────────────────────────────────────────────
+
+def _box_nao_conforme(story, st, lacre=None):
+    """
+    Insere um bloco de alerta vermelho quando o vestígio não está em conformidade.
+    Deve aparecer logo após o cabeçalho, antes de qualquer seção.
+    """
+    st_header = ParagraphStyle(
+        'nc_header', parent=st['subtitulo'],
+        fontSize=10, textColor=BRANCO,
+        fontName='Helvetica-Bold', leading=14,
+    )
+    st_corpo = ParagraphStyle(
+        'nc_corpo', parent=st['label'],
+        fontSize=8, textColor=CINZA_ESCURO,
+        fontName='Helvetica', leading=12,
+    )
+
+    lacre_info = f'Lacre registrado: <b>{lacre}</b>' if lacre else 'Vestígio recebido <b>sem lacre de identificação</b>.'
+
+    header_cell = Paragraph(
+        '⚠  VESTÍGIO NÃO CONFORME  ⚠',
+        st_header,
+    )
+    corpo_cell = Paragraph(
+        f'{lacre_info}<br/>'
+        'Este vestígio foi registrado como <b>NÃO CONFORME</b> ao padrão de '
+        'acondicionamento e identificação estabelecido pelo protocolo forense. '
+        'A não-conformidade deve ser investigada e justificada pelo responsável '
+        'pelo recebimento. '
+        '<i>Art. 158-B, CPP — Lei n.º 13.964/2019 (Pacote Anticrime).</i>',
+        st_corpo,
+    )
+
+    tbl = Table(
+        [[header_cell], [corpo_cell]],
+        colWidths=[17.4 * cm],
+    )
+    tbl.setStyle(TableStyle([
+        # Header vermelha
+        ('BACKGROUND',    (0, 0), (0, 0), ALERTA_FUNDO),
+        ('TEXTCOLOR',     (0, 0), (0, 0), BRANCO),
+        ('ALIGN',         (0, 0), (0, 0), 'CENTER'),
+        ('TOPPADDING',    (0, 0), (0, 0), 7),
+        ('BOTTOMPADDING', (0, 0), (0, 0), 7),
+        # Corpo vermelho claro
+        ('BACKGROUND',    (0, 1), (0, 1), ALERTA_CORPO),
+        ('TOPPADDING',    (0, 1), (0, 1), 6),
+        ('BOTTOMPADDING', (0, 1), (0, 1), 6),
+        ('LEFTPADDING',   (0, 1), (0, 1), 8),
+        ('RIGHTPADDING',  (0, 1), (0, 1), 8),
+        # Borda externa vermelha
+        ('BOX',           (0, 0), (-1, -1), 1.5, ALERTA_BORDA),
+        ('LINEBELOW',     (0, 0), (0, 0), 0.5, ALERTA_BORDA),
+    ]))
+
+    story.append(Spacer(1, 0.3 * cm))
+    story.append(tbl)
+    story.append(Spacer(1, 0.3 * cm))
 
 
 # ─── Gerador de Cabeçalho e Seção Padronizados ───────────────────────────────
@@ -316,19 +383,30 @@ def gerar_ficha_vestigio(vestigio, request):
         'Cadeia de Custódia — Arts. 158-A a 158-F do Código de Processo Penal',
     )
 
+    # ── Alerta de não-conformidade (imediatamente após o cabeçalho) ───────────────
+    if not vestigio.conformidade:
+        _box_nao_conforme(story, st, lacre=vestigio.lacre)
+
     # ── Seção 1: Identificação ────────────────────────────────────────────────────
     _adicionar_secao(story, st, '1. IDENTIFICAÇÃO DO VESTÍGIO')
 
-    def _linha(label, valor):
-        return [Paragraph(label, st_dado_label), Paragraph(_vazio(valor), st_dado_valor)]
+    # Estilo de valor em alerta (vermelho bold) — para o campo conformidade quando NÃO
+    st_dado_valor_alerta = ParagraphStyle(
+        'dado_valor_v_alerta', parent=st_dado_valor,
+        fontName='Helvetica-Bold', textColor=ALERTA_TEXTO,
+    )
+
+    def _linha(label, valor, alerta=False):
+        st_v = st_dado_valor_alerta if alerta else st_dado_valor
+        return [Paragraph(label, st_dado_label), Paragraph(_vazio(valor), st_v)]
 
     ident_pares = [
         _linha('Nº Registro', f'#{vestigio.id}'),
-        _linha('Lacre', vestigio.lacre),
+        _linha('Lacre', vestigio.lacre or 'SEM LACRE — Não conforme', alerta=not vestigio.conformidade and not vestigio.lacre),
         _linha('Nº Processo SEI', vestigio.num_processo_sei),
         _linha('Ocorrência / Ano', f"{vestigio.ocorrencia or '—'}{f' / {vestigio.ano_ocorrencia}' if vestigio.ano_ocorrencia else ''}"),
         _linha('Material Biológico', 'SIM' if vestigio.biologico else 'NÃO'),
-        _linha('Em Conformidade', 'SIM' if vestigio.conformidade else 'NÃO'),
+        _linha('Em Conformidade', 'SIM' if vestigio.conformidade else 'NÃO — Vestígio não conforme', alerta=not vestigio.conformidade),
         _linha('Serviço Pericial', str(vestigio.servico_pericial) if vestigio.servico_pericial else '—'),
         _linha('Unidade Demandante', str(vestigio.unidade_demandante) if vestigio.unidade_demandante else '—'),
         _linha('Autoridade requisitante', str(vestigio.autoridade) if vestigio.autoridade else '—'),
