@@ -40,6 +40,19 @@ class OrdemServicoFilter(django_filters.FilterSet):
         field_name="ocorrencia__perito_atribuido__id", label="Perito Destinatário"
     )
 
+    # ===== FILTROS DE SERVIÇO E UNIDADE =====
+    # Parâmetro enviado pelo frontend: ?servico_id=N
+    servico_id = django_filters.NumberFilter(
+        field_name="ocorrencia__servico_pericial",
+        label="Serviço Pericial",
+    )
+
+    # Parâmetro enviado pelo frontend: ?unidade_id=N
+    unidade_id = django_filters.NumberFilter(
+        field_name="unidade_demandante",
+        label="Unidade Demandante",
+    )
+
     # ===== FILTROS DE DATA =====
     data_inicio = django_filters.DateFilter(
         field_name="created_at", lookup_expr="date__gte", label="Emitida a partir de"

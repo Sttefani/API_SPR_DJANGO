@@ -40,6 +40,29 @@ class IsCustodianteUser(BasePermission):
         )
 
 
+class PodeFinalizar(BasePermission):
+    """
+    Finalizar e reabrir vestígios: ADMINISTRATIVO, CUSTODIANTE e SUPER_ADMIN.
+
+    PERITO e OPERACIONAL têm acesso ao módulo custódia mas não podem finalizar
+    (ação irreversível de encerramento da cadeia de custódia, reservada a
+    responsáveis com autoridade sobre o acervo físico).
+    """
+    message = 'Apenas administradores e custodiantes podem finalizar ou reabrir vestígios.'
+
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        return (
+            request.user.perfil in {
+                User.Perfil.ADMINISTRATIVO,
+                User.Perfil.CUSTODIANTE,
+                User.Perfil.SUPER_ADMIN,
+            }
+            or request.user.is_superuser
+        )
+
+
 class IsSuperAdmin(BasePermission):
     """
     Deleção de registros forenses.

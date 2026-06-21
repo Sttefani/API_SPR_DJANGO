@@ -635,10 +635,12 @@ def gerar_ficha_vestigio(vestigio, request):
             })
         else:
             # ── Rastreio de lacre ──────────────────────────────────────────
-            # Mostra o lacre em De/Para somente quando há lacre na movimentação.
-            # Se o lacre mudou em relação ao vigente, exibe "anterior → novo".
-            # Se é o mesmo, confirma sem indicar alteração.
-            # Se a movimentação não informou lacre, nada é exibido (sem rompimento).
+            # Quando a movimentação informa um lacre:
+            #   - igual ao vigente: confirma sem indicar troca
+            #   - diferente:        exibe "anterior → novo" (troca detectada)
+            # Quando a movimentação NÃO informa lacre:
+            #   - lacre vigente conhecido: herda/mantém ("Lacre mantido: X")
+            #   - nenhum lacre jamais registrado: inconformidade persistente
             if mov.lacre:
                 if lacre_vigente and mov.lacre != lacre_vigente:
                     lacre_linha = (
@@ -647,8 +649,12 @@ def gerar_ficha_vestigio(vestigio, request):
                 else:
                     lacre_linha = f'<br/><b>Lacre:</b> {mov.lacre}'
                 lacre_vigente = mov.lacre
+            elif lacre_vigente:
+                lacre_linha = f'<br/><b>Lacre mantido:</b> {lacre_vigente}'
             else:
-                lacre_linha = ''
+                lacre_linha = (
+                    '<br/><font color="#b91c1c"><i>Sem lacre registrado</i></font>'
+                )
 
             # Observações: descrição + SEI + autoridade (lacre saiu daqui)
             obs_transf = _vazio(mov.descricao)
@@ -666,11 +672,16 @@ def gerar_ficha_vestigio(vestigio, request):
             })
 
             if mov.aceito:
-                # De/Para do ACEITE confirma o lacre recebido (se houver)
+                # De/Para do ACEITE confirma o lacre — herda lacre_vigente se
+                # a movimentação não informou número próprio (lacre mantido)
                 quem_aceitou = str(mov.user_destino) if mov.user_destino else '—'
-                aceite_lacre = (
-                    f'<br/><b>Lacre confirmado:</b> {mov.lacre}' if mov.lacre else ''
-                )
+                _lacre_aceite = mov.lacre or lacre_vigente
+                if _lacre_aceite:
+                    aceite_lacre = f'<br/><b>Lacre confirmado:</b> {_lacre_aceite}'
+                else:
+                    aceite_lacre = (
+                        '<br/><font color="#b91c1c"><i>Sem lacre registrado</i></font>'
+                    )
                 eventos.append({
                     'tipo':          'ACEITE',
                     'data_hora':     _formatar_dt(mov.data_hora_aceito),

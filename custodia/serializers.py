@@ -121,6 +121,7 @@ class VestigioDetailSerializer(serializers.ModelSerializer):
     registrado_por  = serializers.SerializerMethodField()
     atualizado_por  = serializers.SerializerMethodField()
     pode_movimentar = serializers.SerializerMethodField()
+    pode_editar     = serializers.SerializerMethodField()
 
     def get_registrado_por(self, obj):
         return obj.get_responsavel()
@@ -129,6 +130,15 @@ class VestigioDetailSerializer(serializers.ModelSerializer):
         if obj.updated_by:
             return obj.updated_by.nome_completo
         return None
+
+    def get_pode_editar(self, obj):
+        """
+        False quando já existe qualquer movimentação — a cadeia de custódia é imutável
+        a partir do primeiro movimento registrado, independente do status atual.
+        """
+        if obj.status == 'FINALIZADO':
+            return False
+        return not VestigioMovimentacao.objects.filter(vestigio=obj).exists()
 
     def get_pode_movimentar(self, obj):
         """
@@ -142,8 +152,6 @@ class VestigioDetailSerializer(serializers.ModelSerializer):
         if not request or not request.user.is_authenticated:
             return False
         user = request.user
-        if user.perfil == 'EXTERNO':
-            return False
 
         ultima = VestigioMovimentacao.objects.filter(
             vestigio=obj
@@ -152,6 +160,11 @@ class VestigioDetailSerializer(serializers.ModelSerializer):
         # Bloqueia se há movimentação pendente
         if ultima is not None and not ultima.aceito:
             return False
+
+        # EXTERNO: pode movimentar APENAS na primeira transferência (envio à custódia)
+        # — ou seja, criou o vestígio e ainda não há movimentação alguma
+        if user.perfil == 'EXTERNO':
+            return ultima is None and obj.created_by_id == user.pk
 
         # Admin sempre podem (quando não há pendente)
         if getattr(user, 'is_superuser', False) or user.perfil in {'ADMINISTRATIVO', 'SUPER_ADMIN'}:
@@ -179,7 +192,7 @@ class VestigioDetailSerializer(serializers.ModelSerializer):
             'user_destino', 'procedimentos', 'ocorrencias_vinculadas',
             'vestigio_contra_prova', 'vestigio_contra_prova_lacre',
             'created_by', 'updated_by', 'registrado_por', 'atualizado_por',
-            'created_at', 'updated_at', 'pode_movimentar',
+            'created_at', 'updated_at', 'pode_movimentar', 'pode_editar',
         ]
 
 

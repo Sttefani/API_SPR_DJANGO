@@ -28,7 +28,7 @@ from .serializers import (
     UnidadeResumoSerializer,
     OcorrenciaResumoSerializer,
 )
-from .permissions import PodeCustodiar, PodeVerCustodia, IsExternoUser, IsCustodianteUser, IsSuperAdmin
+from .permissions import PodeCustodiar, PodeVerCustodia, PodeFinalizar, IsExternoUser, IsCustodianteUser, IsSuperAdmin
 from .pdf_generator import (
     gerar_ficha_vestigio, gerar_ficha_dna, gerar_certidao_ausencia_dna,
     gerar_relatorio_vestigios, gerar_relatorio_dnas,
@@ -198,8 +198,14 @@ class VestigioViewSet(viewsets.ModelViewSet):
         # Deleção restrita a SUPER_ADMIN — o Java original não tinha DELETE em vestígios
         if self.action == 'destroy':
             return [IsSuperAdmin()]
-        # Editar, finalizar e reabrir exigem PodeCustodiar (EXTERNO não pode)
-        if self.action in ('update', 'partial_update', 'finalizar', 'reabrir'):
+        # Reabrir: exclusivo de SUPER_ADMIN — desfaz um encerramento com assinatura formal
+        if self.action == 'reabrir':
+            return [IsSuperAdmin()]
+        # Finalizar: ADMINISTRATIVO, CUSTODIANTE, SUPER_ADMIN (OPERACIONAL e PERITO não encerram)
+        if self.action == 'finalizar':
+            return [PodeFinalizar()]
+        # Editar exige PodeCustodiar (EXTERNO não pode)
+        if self.action in ('update', 'partial_update'):
             return [PodeCustodiar()]
         # Criar: EXTERNO também pode (registra vestígios da própria unidade)
         return [PodeVerCustodia()]
@@ -215,9 +221,17 @@ class VestigioViewSet(viewsets.ModelViewSet):
         instance = serializer.instance  # já carregado pelo update() do DRF — sem double-fetch
         user = self.request.user
 
+        # Imutabilidade após movimentação: qualquer movimentação inicia a cadeia de custódia
+        # formal — editar depois desacreditaria a integridade probatória do registro.
+        if VestigioMovimentacao.objects.filter(vestigio=instance).exists():
+            raise ValidationError(
+                {"detail": "Vestígio com movimentações não pode ser editado. "
+                           "A cadeia de custódia já foi iniciada e o registro é imutável."}
+            )
+
         if instance.status == Vestigio.Status.FINALIZADO:
             raise ValidationError(
-                {"detail": "Não é permitido alterar um vestígio FINALIZADO. Reabra-o primeiro."}
+                {"detail": "Não é permitido alterar um vestígio FINALIZADO."}
             )
 
         # Apenas autor do cadastro ou ADMIN/SUPER_ADMIN pode editar (espelho do VestigioService.update)
@@ -252,17 +266,6 @@ class VestigioViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         user = request.user
-
-        # ── Verificação de perfil ─────────────────────────────────────────
-        pode_finalizar = (
-            user.perfil in {User.Perfil.ADMINISTRATIVO, User.Perfil.SUPER_ADMIN, User.Perfil.CUSTODIANTE}
-            or user.is_superuser
-        )
-        if not pode_finalizar:
-            return Response(
-                {'detail': 'Apenas administradores ou custodiantes podem finalizar vestígios.'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
 
         # ── Assinatura digital (não-repúdio) ──────────────────────────────
         email_assinado = serializer.validated_data['assinatura_email']
@@ -564,6 +567,44 @@ class VestigioViewSet(viewsets.ModelViewSet):
         vestigio = self.get_object()
         return gerar_ficha_vestigio(vestigio, request)
 
+    @action(detail=False, methods=['get'], url_path='auto-complete')
+    def auto_complete(self, request):
+        """
+        Typeahead de vestígios — espelho de VestigioController.autocomplete() do Java.
+
+        ?valor=<string>  — filtra por lacre, SEI, ocorrência ou descrição
+                           se o valor for numérico puro, também filtra por ID
+        Retorna no máximo 20 resultados no formato mínimo (id, lacre, ocorrência, status).
+        Respeita os filtros de visibilidade por perfil (EXTERNO → apenas sua unidade).
+        """
+        valor = request.query_params.get('valor', '').strip()
+        qs = self.get_queryset()
+
+        if valor:
+            from django.db.models import Q as _Q
+            filtro = (
+                _Q(lacre__icontains=valor)
+                | _Q(num_processo_sei__icontains=valor)
+                | _Q(ocorrencia__icontains=valor)
+                | _Q(descricao__icontains=valor)
+            )
+            if valor.isdigit():
+                filtro |= _Q(id=int(valor))
+            qs = qs.filter(filtro)
+
+        qs = qs.only('id', 'lacre', 'ocorrencia', 'ano_ocorrencia', 'status')[:20]
+        data = [
+            {
+                'id': v.id,
+                'lacre': v.lacre or '',
+                'ocorrencia': v.ocorrencia or '',
+                'ano_ocorrencia': v.ano_ocorrencia,
+                'status': v.status,
+            }
+            for v in qs
+        ]
+        return Response(data)
+
     @action(detail=False, methods=['get'], url_path='dashboard')
     def dashboard(self, request):
         qs = self.get_queryset()
@@ -700,8 +741,11 @@ class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
         # Deleção restrita a SUPER_ADMIN — movimentações são registros de cadeia de custódia
         if self.action == 'destroy':
             return [IsSuperAdmin()]
-        if self.action in ('create', 'update', 'partial_update'):
+        if self.action in ('update', 'partial_update'):
             return [PodeCustodiar()]
+        # create: EXTERNO também pode (envio inicial à custódia)
+        if self.action == 'create':
+            return [PodeVerCustodia()]
         return [PodeVerCustodia()]
 
     # -----------------------------------------------------------------------
@@ -771,6 +815,17 @@ class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
             raise ValidationError(
                 {'detail': 'Usuário não tem permissão para cadastrar nova movimentação neste vestígio.'}
             )
+
+        # EXTERNO: validações adicionais para o envio inicial à custódia
+        if _is_externo(user):
+            if vestigio.created_by_id != user.pk:
+                raise ValidationError(
+                    {'detail': 'Usuário externo só pode movimentar vestígios que cadastrou.'}
+                )
+            if not serializer.validated_data.get('servico_pericial'):
+                raise ValidationError(
+                    {'detail': 'Usuário externo deve informar o serviço pericial de destino.'}
+                )
 
         movimentacao = serializer.save(created_by=user)
 
