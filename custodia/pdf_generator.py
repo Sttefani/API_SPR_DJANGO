@@ -270,6 +270,45 @@ def _gerar_rodape(canvas, doc, request, url_validacao, tag_documento):
     canvas.restoreState()
 
 
+# ─── Integridade de conteúdo (digest do snapshot) ─────────────────────────────
+
+def _calcular_hash_conteudo(vestigio) -> str:
+    """
+    Digest SHA-256 determinístico do estado do vestígio + sua cadeia de
+    movimentações no momento da emissão. Serve de prova de integridade do
+    CONTEÚDO da ficha: qualquer adulteração posterior (data, lacre, status,
+    responsável) altera o digest, que deixa de bater com o registro gravado.
+    """
+    import hashlib
+    from custodia.models import VestigioMovimentacao
+
+    partes = [
+        f'V{vestigio.id}',
+        f'lacre={vestigio.lacre or ""}',
+        f'sei={vestigio.num_processo_sei or ""}',
+        f'status={vestigio.status}',
+        f'conf={int(vestigio.conformidade)}',
+        f'bio={int(vestigio.biologico)}',
+        f'saiu={int(vestigio.saiu_da_custodia)}',
+        f'servico={vestigio.servico_pericial_id or ""}',
+        f'unidade={vestigio.unidade_demandante_id or ""}',
+        f'destino={vestigio.user_destino_id or ""}',
+        f'motivo={(vestigio.motivo_finalizacao or "").strip()}',
+    ]
+    movs = VestigioMovimentacao.all_objects.filter(
+        vestigio=vestigio
+    ).order_by('created_at')
+    for m in movs:
+        partes.append(
+            f'M{m.id}:srv={m.servico_pericial_id or ""}:und={m.unidade_demandante_id or ""}'
+            f':dest={m.user_destino_id or ""}:ace={int(m.aceito)}'
+            f':dha={m.data_hora_aceito.isoformat() if m.data_hora_aceito else ""}'
+            f':lac={m.lacre or ""}:del={m.deleted_at.isoformat() if m.deleted_at else ""}'
+        )
+    snapshot = '|'.join(partes)
+    return hashlib.sha256(snapshot.encode('utf-8')).hexdigest()
+
+
 # ─── Gerador principal: Vestígio ──────────────────────────────────────────────
 
 # Cores para badges de evento na cadeia de custódia (escala de cinza, sóbria)
@@ -334,11 +373,16 @@ def gerar_ficha_vestigio(vestigio, request):
     host = request.build_absolute_uri('/')
     url_validacao = f"{host.rstrip('/')}/api/custodia/vestigios/validar-ficha/?protocolo={protocolo_fav}"
 
+    # Digest de integridade do conteúdo (snapshot do vestígio + cadeia)
+    conteudo_hash = _calcular_hash_conteudo(vestigio)
+    conteudo_hash_fmt = conteudo_hash[:32].upper()  # 32 chars legíveis no documento
+
     # Grava o registro para validação posterior via QR code
     FichaVestigioRegistro.objects.create(
         protocolo        = protocolo_fav,
         vestigio         = vestigio,
         vestigio_lacre   = vestigio.lacre or '',
+        conteudo_hash    = conteudo_hash,
         emitido_por      = request.user,
         emitido_por_nome = getattr(request.user, 'nome_completo', None) or str(request.user),
         emitido_em       = now_fav,
@@ -765,6 +809,91 @@ def gerar_ficha_vestigio(vestigio, request):
 
     cadeia_tbl.setStyle(TableStyle(base_style))
     story.append(cadeia_tbl)
+
+    # ── Seção: Elos da Cadeia de Custódia (Art. 158-B do CPP) ────────────────────
+    # Amarra a ficha ao vocabulário legal das 10 etapas, indicando onde cada elo
+    # é evidenciado pelo sistema (os 3 primeiros ocorrem na cena do crime).
+    num += 1
+    _adicionar_secao(story, st, f'{num}. ELOS DA CADEIA DE CUSTÓDIA (ART. 158-B, CPP)')
+    elos_cab = [Paragraph(c, st_cab_col) for c in ['Elo legal', 'Etapa', 'Onde é evidenciado nesta ficha']]
+    elos_dados = [
+        ('I — Reconhecimento',   'Cena',     'Etapa de campo (anterior ao sistema laboratorial)'),
+        ('II — Isolamento',      'Cena',     'Etapa de campo (anterior ao sistema laboratorial)'),
+        ('III — Fixação',        'Cena',     'Etapa de campo (anterior ao sistema laboratorial)'),
+        ('IV — Coleta',          'Entrada',  'Registro inicial do vestígio'),
+        ('V — Acondicionamento', 'Entrada',  'Registro inicial — lacre de entrada'),
+        ('VI — Transporte',      'Trânsito', 'Eventos de TRANSFERÊNCIA da cadeia'),
+        ('VII — Recebimento',    'Custódia', 'Eventos de ACEITE da cadeia'),
+        ('VIII — Processamento', 'Exame',    'Seção Material Pericial / procedimentos'),
+        ('IX — Armazenamento',   'Guarda',   'Seção Situação Atual (detentor vigente)'),
+        ('X — Descarte',         'Saída',    'Finalização (quando o vestígio sai da custódia)'),
+    ]
+    elos_rows = [elos_cab]
+    for elo, etapa, onde in elos_dados:
+        elos_rows.append([
+            Paragraph(elo, st_cel_bold),
+            Paragraph(etapa, st_cel),
+            Paragraph(onde, st_cel),
+        ])
+    elos_tbl = Table(elos_rows, colWidths=[4.6 * cm, 2.6 * cm, 10.2 * cm], repeatRows=1)
+    elos_tbl.setStyle(TableStyle([
+        ('LINEBELOW',     (0, 0), (-1, 0), 1.2, PRETO),
+        ('LINEBELOW',     (0, 1), (-1, -1), 0.4, BORDAS),
+        ('ROWBACKGROUNDS',(0, 1), (-1, -1), [BRANCO, CINZA_CLARO]),
+        ('TOPPADDING',    (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 3),
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    story.append(elos_tbl)
+
+    # ── Seção: Autenticação do Documento ─────────────────────────────────────────
+    # Assinatura eletrônica do emissor + protocolo + digest de integridade do
+    # conteúdo (não-repúdio de quem emitiu e prova de que o conteúdo não foi alterado).
+    num += 1
+    _adicionar_secao(story, st, f'{num}. AUTENTICAÇÃO DO DOCUMENTO')
+
+    try:
+        perfil_emissor = request.user.get_perfil_display()
+    except Exception:
+        perfil_emissor = getattr(request.user, 'perfil', '') or ''
+    cpf_emissor = getattr(request.user, 'cpf', '') or '—'
+    nome_emissor = getattr(request.user, 'nome_completo', None) or str(request.user)
+
+    auth_linhas = [
+        [Paragraph('Emitido por', st_dado_label),
+         Paragraph(f'{nome_emissor}{f" — {perfil_emissor}" if perfil_emissor else ""}', st_dado_valor)],
+        [Paragraph('CPF do emissor', st_dado_label), Paragraph(cpf_emissor, st_dado_valor)],
+        [Paragraph('Data / Hora da emissão', st_dado_label), Paragraph(_formatar_dt(now_fav), st_dado_valor)],
+        [Paragraph('Protocolo', st_dado_label), Paragraph(protocolo_fmt, st_dado_valor)],
+        [Paragraph('Hash de integridade (SHA-256)', st_dado_label),
+         Paragraph(f'<font face="Courier">{conteudo_hash_fmt}</font>', st_dado_valor)],
+    ]
+    auth_tbl = Table(auth_linhas, colWidths=[4.4 * cm, 13.0 * cm])
+    auth_tbl.setStyle(TableStyle([
+        ('BOX',           (0, 0), (-1, -1), 1, BORDAS),
+        ('LINEBELOW',     (0, 0), (-1, -2), 0.5, BORDAS),
+        ('BACKGROUND',    (0, 0), (0, -1), colors.HexColor('#e2e8f0')),
+        ('BACKGROUND',    (1, 0), (-1, -1), CINZA_CLARO),
+        ('TOPPADDING',    (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 8),
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    story.append(auth_tbl)
+
+    st_nota_auth = ParagraphStyle(
+        'nota_auth', parent=base['Normal'], fontName='Helvetica-Oblique',
+        fontSize=7.5, textColor=CINZA_MEDIO, leading=10,
+    )
+    story.append(Spacer(1, 0.25 * cm))
+    story.append(Paragraph(
+        'Documento gerado eletronicamente pelo SPR-Criminalística. A autenticidade e a integridade do '
+        'conteúdo podem ser verificadas pelo QR Code do rodapé ou pelo protocolo acima — o hash recomputado '
+        'na validação deve coincidir com o registrado. Validade conforme MP nº 2.200-2/2001 (ICP-Brasil) e '
+        'Arts. 158-A a 158-F do Código de Processo Penal.',
+        st_nota_auth,
+    ))
 
     def rodape_cb_vestigio(canvas, doc_):
         _gerar_rodape(canvas, doc_, request, url_validacao, f'Vestígio #{vestigio.id} | Prot.: {protocolo_fmt}')

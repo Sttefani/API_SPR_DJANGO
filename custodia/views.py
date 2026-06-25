@@ -2,6 +2,7 @@
 
 from django.utils import timezone
 from datetime import timedelta
+from django.db import transaction
 from django.db.models import Count, Q, Max
 from django.db.models.functions import TruncMonth
 from rest_framework import viewsets, status
@@ -148,6 +149,51 @@ def _qs_filtro_unidade(qs, user, campo_unidade, campo_destino=None,
     if not ud:
         return qs.none()
     return qs.filter(**{campo_unidade: ud})
+
+
+def _qs_movimentacao_por_perfil(qs, user):
+    """
+    Filtro de visibilidade de MOVIMENTAÇÕES por perfil.
+
+    CRÍTICO — usa os campos DA PRÓPRIA MOVIMENTAÇÃO (servico_pericial /
+    unidade_demandante / user_destino), que representam o DESTINO da
+    transferência, e NÃO os campos atuais do vestígio. A movimentação já nasce
+    gravada com o serviço/unidade de destino; o vestígio só passa a "pertencer"
+    a esse destino quando a movimentação é aceita. Filtrar pelos campos do
+    vestígio tornaria a transferência PENDENTE invisível ao serviço de destino
+    — que então nunca conseguiria dar o aceite (a bola é passada mas o recebedor
+    não a vê chegar). Espelha as queries by-servicos-periciais /
+    by-unidade-demandante / by-user do VestigioMovimentacaoRepository (Java).
+
+      created_by         → o emissor continua vendo o que enviou
+      servico_pericial   → o serviço de destino vê o passe chegando / o que detém
+      unidade_demandante → a unidade de destino vê o que chega para ela
+      user_destino       → quem recebeu nominalmente continua vendo
+
+    ADMINISTRATIVO / CUSTODIANTE / SUPER_ADMIN não passam por aqui (veem tudo).
+    """
+    if not _filtra_por_unidade(user):
+        return qs
+
+    if _is_externo(user):
+        ud = user.unidade_demandante
+        if not ud:
+            return qs.none()
+        return qs.filter(
+            Q(unidade_demandante=ud)
+            | Q(created_by=user)
+            | Q(user_destino=user)
+        ).distinct()
+
+    # PERITO / OPERACIONAL
+    visivel = (
+        Q(created_by=user)
+        | Q(user_destino=user)
+        | Q(servico_pericial__in=user.servicos_periciais.all())
+    )
+    if user.unidade_demandante_id:
+        visivel |= Q(unidade_demandante=user.unidade_demandante)
+    return qs.filter(visivel).distinct()
 
 
 # ---------------------------------------------------------------------------
@@ -299,28 +345,33 @@ class VestigioViewSet(viewsets.ModelViewSet):
             )
 
         # ── Gravar finalização ────────────────────────────────────────────
+        # Atômico (espelha @Transactional do Java): a finalização do vestígio e
+        # a movimentação final de encerramento são uma única unidade indivisível.
+        # Se qualquer parte falhar, nada é gravado — sem estados intermediários
+        # na cadeia de custódia.
         motivo = serializer.validated_data['motivo_finalizacao']
 
-        vestigio.status = Vestigio.Status.FINALIZADO
-        vestigio.saiu_da_custodia = serializer.validated_data['saiu_da_custodia']
-        vestigio.motivo_finalizacao = motivo
-        vestigio.updated_by = user
-        vestigio.save()
+        with transaction.atomic():
+            vestigio.status = Vestigio.Status.FINALIZADO
+            vestigio.saiu_da_custodia = serializer.validated_data['saiu_da_custodia']
+            vestigio.motivo_finalizacao = motivo
+            vestigio.updated_by = user
+            vestigio.save()
 
-        # Cria movimentação final copiando a última (BeanUtils.copyProperties do Java)
-        VestigioMovimentacao.objects.create(
-            vestigio=vestigio,
-            lacre=ultima_mov.lacre,
-            num_processo_sei=ultima_mov.num_processo_sei,
-            descricao=motivo,
-            unidade_demandante=ultima_mov.unidade_demandante,
-            servico_pericial=ultima_mov.servico_pericial,
-            autoridade=ultima_mov.autoridade,
-            user_destino=ultima_mov.user_destino,
-            aceito=True,
-            data_hora_aceito=timezone.now(),
-            created_by=user,
-        )
+            # Cria movimentação final copiando a última (BeanUtils.copyProperties do Java)
+            VestigioMovimentacao.objects.create(
+                vestigio=vestigio,
+                lacre=ultima_mov.lacre,
+                num_processo_sei=ultima_mov.num_processo_sei,
+                descricao=motivo,
+                unidade_demandante=ultima_mov.unidade_demandante,
+                servico_pericial=ultima_mov.servico_pericial,
+                autoridade=ultima_mov.autoridade,
+                user_destino=ultima_mov.user_destino,
+                aceito=True,
+                data_hora_aceito=timezone.now(),
+                created_by=user,
+            )
 
         return Response(VestigioDetailSerializer(vestigio, context={'request': request}).data)
 
@@ -665,9 +716,18 @@ class VestigioViewSet(viewsets.ModelViewSet):
         # Status atual do vestígio (pode ter mudado desde a emissão)
         status_atual = None
         status_display = None
+        conteudo_atual_confere = None
         if reg.vestigio:
             status_atual   = reg.vestigio.status
             status_display = reg.vestigio.get_status_display()
+            # Recalcula o digest do estado ATUAL e compara com o gravado na emissão.
+            # True  → nada mudou no vestígio desde que esta ficha foi emitida.
+            # False → houve movimentações/alterações posteriores à emissão.
+            if reg.conteudo_hash:
+                from .pdf_generator import _calcular_hash_conteudo
+                conteudo_atual_confere = (
+                    _calcular_hash_conteudo(reg.vestigio) == reg.conteudo_hash
+                )
 
         return Response({
             'valido':          True,
@@ -676,6 +736,10 @@ class VestigioViewSet(viewsets.ModelViewSet):
             'vestigio_lacre':  reg.vestigio_lacre,
             'status_atual':    status_atual,
             'status_display':  status_display,
+            # Digest do conteúdo no momento da emissão — deve coincidir com o
+            # hash impresso na ficha (prova de integridade contra adulteração).
+            'conteudo_hash':           reg.conteudo_hash[:32].upper() if reg.conteudo_hash else None,
+            'conteudo_atual_confere':  conteudo_atual_confere,
             'emitido_por':     reg.emitido_por_nome,
             'emitido_em':      reg.emitido_em.strftime('%d/%m/%Y %H:%M'),
         })
@@ -699,28 +763,25 @@ class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
             'autoridade', 'user_destino', 'created_by',
         ).order_by('-created_at')
 
-        # PERITO/OPERACIONAL → movimentações dos seus serviços periciais OU atribuídas a eles
-        # EXTERNO            → apenas movimentações da unidade
         user = self.request.user
-        if _filtra_por_unidade(user):
-            qs = _qs_filtro_unidade(
-                qs, user,
-                campo_unidade='vestigio__unidade_demandante',
-                campo_destino='vestigio__user_destino',
-                campo_servico='vestigio__servico_pericial',
-            )
+
+        # Visibilidade por perfil — pelos campos da própria movimentação (destino
+        # do passe), não pelos campos atuais do vestígio. Ver _qs_movimentacao_por_perfil.
+        qs = _qs_movimentacao_por_perfil(qs, user)
 
         # Filtro especial: ?aguardando_meu_aceite=true
         # Retorna apenas movimentações pendentes que o usuário atual pode aceitar,
         # replicando a lógica de get_pode_aceitar() do serializer no lado do banco.
         if self.request.query_params.get('aguardando_meu_aceite') == 'true':
             qs = qs.filter(aceito=False)
-            if not (user.is_superuser or user.perfil in {
-                User.Perfil.ADMINISTRATIVO, User.Perfil.SUPER_ADMIN
-            }):
+            if not (user.is_superuser or user.perfil == User.Perfil.SUPER_ADMIN):
                 if user.perfil == User.Perfil.CUSTODIANTE:
                     qs = qs.exclude(created_by=user)
-                elif user.perfil in {User.Perfil.PERITO, User.Perfil.OPERACIONAL}:
+                elif user.perfil in {
+                    User.Perfil.PERITO, User.Perfil.OPERACIONAL, User.Perfil.ADMINISTRATIVO
+                }:
+                    # ADMINISTRATIVO recebe por lotação, então sua caixa de aceite
+                    # é filtrada por serviço pericial, igual a PERITO/OPERACIONAL.
                     servicos_ids = user.servicos_periciais.values_list('id', flat=True)
                     qs = qs.filter(
                         Q(servico_pericial__in=servicos_ids) | Q(user_destino=user)
@@ -827,13 +888,16 @@ class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
                     {'detail': 'Usuário externo deve informar o serviço pericial de destino.'}
                 )
 
-        movimentacao = serializer.save(created_by=user)
+        # Atômico: registrar a movimentação e a transição INICIAL → ANDAMENTO
+        # do vestígio são indivisíveis — não pode existir movimentação sem o
+        # status do vestígio refletir que a cadeia de custódia foi iniciada.
+        with transaction.atomic():
+            movimentacao = serializer.save(created_by=user)
 
-        # Transição automática INICIAL → ANDAMENTO
-        if vestigio.status == Vestigio.Status.INICIAL:
-            vestigio.status = Vestigio.Status.ANDAMENTO
-            vestigio.updated_by = user
-            vestigio.save()
+            if vestigio.status == Vestigio.Status.INICIAL:
+                vestigio.status = Vestigio.Status.ANDAMENTO
+                vestigio.updated_by = user
+                vestigio.save()
 
     def perform_update(self, serializer):
         """
@@ -894,13 +958,17 @@ class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
         user = request.user
         autorizado = False
 
+        # Override global de aceite: SUPER_ADMIN e CUSTODIANTE.
+        # ADMINISTRATIVO NÃO tem override — só recebe se estiver lotado no
+        # serviço pericial de destino (mesma regra de PERITO/OPERACIONAL).
         if (
-            user.perfil in {User.Perfil.ADMINISTRATIVO, User.Perfil.SUPER_ADMIN, User.Perfil.CUSTODIANTE}
+            user.perfil in {User.Perfil.SUPER_ADMIN, User.Perfil.CUSTODIANTE}
             or user.is_superuser
         ):
             autorizado = True
 
         elif movimentacao.servico_pericial_id:
+            # PERITO / OPERACIONAL / ADMINISTRATIVO: só se lotado no serviço de destino
             autorizado = user.servicos_periciais.filter(
                 id=movimentacao.servico_pericial_id
             ).exists()
@@ -914,20 +982,45 @@ class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Registra o aceite — quem aceitou vira o responsável (Java: setUserDestino(authUser))
-        movimentacao.user_destino = user
-        movimentacao.aceito = True
-        movimentacao.data_hora_aceito = timezone.now()
-        movimentacao.save()
+        # ── Aceite atômico com trava pessimista ───────────────────────────────
+        # Registrar o recebimento na movimentação e transferir a posse no vestígio
+        # são indivisíveis. select_for_update serializa o acesso à linha e impede
+        # aceite duplo sob concorrência (dois servidores confirmando ao mesmo tempo)
+        # — supera o Java, que tinha @Transactional mas não travava a linha.
+        with transaction.atomic():
+            # NÃO usar select_related aqui: servico_pericial/unidade são FKs
+            # nuláveis e gerariam LEFT OUTER JOIN — o PostgreSQL proíbe
+            # SELECT ... FOR UPDATE no lado nulável de um outer join. Travamos
+            # apenas a linha da própria movimentação (tabela base).
+            mov = (
+                VestigioMovimentacao.objects
+                .select_for_update()
+                .get(pk=movimentacao.pk)
+            )
+            # Re-checagem sob trava: se outra requisição aceitou primeiro, aborta.
+            if mov.aceito:
+                return Response(
+                    {'detail': 'Movimentação já foi aceita.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-        vestigio = movimentacao.vestigio
-        vestigio.user_destino = user  # responsabilidade passa para quem aceitou
-        if movimentacao.servico_pericial:
-            vestigio.servico_pericial = movimentacao.servico_pericial
-        vestigio.updated_by = user
-        vestigio.save()
+            # Quem aceitou vira o responsável (Java: setUserDestino(authUser))
+            mov.user_destino = user
+            mov.aceito = True
+            mov.data_hora_aceito = timezone.now()
+            mov.save()
 
-        return Response(VestigioMovimentacaoListSerializer(movimentacao).data)
+            vestigio = Vestigio.objects.select_for_update().get(pk=mov.vestigio_id)
+            vestigio.user_destino = user  # responsabilidade passa para quem aceitou
+            if mov.servico_pericial_id:
+                # usa o FK por _id (sem carregar o objeto) — evita join e query extra
+                vestigio.servico_pericial_id = mov.servico_pericial_id
+            vestigio.updated_by = user
+            vestigio.save()
+
+        return Response(
+            VestigioMovimentacaoListSerializer(mov, context={'request': request}).data
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1480,18 +1573,22 @@ class CustodiaResumoView(APIView):
         qs_movs  = VestigioMovimentacao.objects.all()
         qs_dnas  = DNA.objects.all()
 
-        # Vestígios e movimentações: filtrados por unidade/atribuição
-        # DNAs: banco nacional — sem filtro de unidade para nenhum perfil
+        # Vestígios e movimentações: filtrados por perfil (mesma lógica das
+        # listagens, para o widget bater com o que o usuário realmente vê).
+        # DNAs: banco nacional — sem filtro de unidade para nenhum perfil.
+        #
+        # NÃO há atalho "sem unidade → zeros": PERITO/OPERACIONAL enxergam por
+        # serviço pericial e por autoria (created_by), e tipicamente não têm
+        # unidade_demandante preenchida — zerar aqui esvaziaria o widget deles.
         if _filtra_por_unidade(user):
-            if not user.unidade_demandante:
-                return Response({
-                    'vestigios': {'total': 0, 'inicial': 0, 'andamento': 0,
-                                  'finalizado': 0, 'biologicos': 0},
-                    'dnas_total': 0,
-                    'transferencias_pendentes': 0,
-                })
-            qs      = _qs_filtro_unidade(qs,      user, 'unidade_demandante',           'user_destino',           campo_servico='servico_pericial')
-            qs_movs = _qs_filtro_unidade(qs_movs, user, 'vestigio__unidade_demandante', 'vestigio__user_destino',  campo_servico='vestigio__servico_pericial')
+            qs = _qs_filtro_unidade(
+                qs, user,
+                campo_unidade='unidade_demandante',
+                campo_destino='user_destino',
+                campo_criado_por='created_by',
+                campo_servico='servico_pericial',
+            )
+            qs_movs = _qs_movimentacao_por_perfil(qs_movs, user)
 
         # Filtro por serviço pericial (todos os perfis)
         sp_id = request.query_params.get('servico_pericial_id')
@@ -1676,32 +1773,66 @@ class AnalyticsCustodiaView(APIView):
         # -------------------------------------------------------------------
         # Querysets base com filtros
         # -------------------------------------------------------------------
-        qs = Vestigio.objects.all()
-        qs_dna = DNA.objects.all()
+        # -------------------------------------------------------------------
+        # Escopo de visibilidade por perfil + filtros (serviço, data)
+        # -------------------------------------------------------------------
+        # CUSTODIANTE / ADMINISTRATIVO / SUPER_ADMIN → visão global.
+        # PERITO / OPERACIONAL → apenas o(s) serviço(s) em que estão lotados.
+        # Movimentações e DNAs herdam o serviço pelo vestígio vinculado.
+        user = request.user
+        ver_tudo = (
+            user.perfil in {
+                User.Perfil.CUSTODIANTE, User.Perfil.ADMINISTRATIVO, User.Perfil.SUPER_ADMIN
+            }
+            or user.is_superuser
+        )
+        servicos_ids = None if ver_tudo else list(
+            user.servicos_periciais.values_list('id', flat=True)
+        )
 
+        # Bases já com escopo de perfil + filtro de serviço (sem janela de data)
+        qs_base     = Vestigio.objects.all()
+        qs_dna_base = DNA.objects.all()
+        qs_mov_base = VestigioMovimentacao.objects.all()
+
+        if servicos_ids is not None:
+            qs_base     = qs_base.filter(servico_pericial_id__in=servicos_ids)
+            qs_dna_base = qs_dna_base.filter(vestigio__servico_pericial_id__in=servicos_ids)
+            qs_mov_base = qs_mov_base.filter(vestigio__servico_pericial_id__in=servicos_ids)
+        if servico_id:
+            qs_base     = qs_base.filter(servico_pericial_id=servico_id)
+            qs_dna_base = qs_dna_base.filter(vestigio__servico_pericial_id=servico_id)
+            qs_mov_base = qs_mov_base.filter(vestigio__servico_pericial_id=servico_id)
+
+        # Janela de data (created_at) — para os painéis de volume/período
+        qs     = qs_base
+        qs_dna = qs_dna_base
+        qs_mov = qs_mov_base
         if data_inicio:
             qs     = qs.filter(created_at__date__gte=data_inicio)
             qs_dna = qs_dna.filter(created_at__date__gte=data_inicio)
+            qs_mov = qs_mov.filter(created_at__date__gte=data_inicio)
         if data_fim:
             qs     = qs.filter(created_at__date__lte=data_fim)
             qs_dna = qs_dna.filter(created_at__date__lte=data_fim)
-        if servico_id:
-            qs = qs.filter(servico_pericial_id=servico_id)
+            qs_mov = qs_mov.filter(created_at__date__lte=data_fim)
 
         total = qs.count() or 1  # evitar divisão por zero
 
         # -------------------------------------------------------------------
-        # KPIs
+        # KPIs (todos respeitam escopo de perfil + filtros)
         # -------------------------------------------------------------------
+        agora = timezone.now()
         total_vestigios    = qs.count()
         vestigios_ativos   = qs.filter(status__in=[Vestigio.Status.INICIAL, Vestigio.Status.ANDAMENTO]).count()
-        aguardando_aceite  = VestigioMovimentacao.objects.filter(aceito=False).count()
+        # "Aguardando aceite" e "Finalizados no mês" são fotografias do estado
+        # atual: escopadas por perfil/serviço, mas sem a janela de data.
+        aguardando_aceite  = qs_mov_base.filter(aceito=False).count()
         total_dnas         = qs_dna.count()
         biologicos_ativos  = qs.filter(biologico=True, status__in=[Vestigio.Status.INICIAL, Vestigio.Status.ANDAMENTO]).count()
         saiu_custodia      = qs.filter(status=Vestigio.Status.FINALIZADO, saiu_da_custodia=True).count()
 
-        agora = timezone.now()
-        finalizados_mes = Vestigio.objects.filter(
+        finalizados_mes = qs_base.filter(
             status=Vestigio.Status.FINALIZADO,
             updated_at__year=agora.year,
             updated_at__month=agora.month,
@@ -1766,14 +1897,12 @@ class AnalyticsCustodiaView(APIView):
             .order_by('mes')
         )
 
-        # Evolução mensal — finalizações (independente do filtro de serviço para ter contexto global)
-        qs_final = Vestigio.objects.filter(status=Vestigio.Status.FINALIZADO, updated_at__isnull=False)
+        # Evolução mensal — finalizações (mesmo escopo de perfil/serviço; janela por updated_at)
+        qs_final = qs_base.filter(status=Vestigio.Status.FINALIZADO, updated_at__isnull=False)
         if data_inicio:
             qs_final = qs_final.filter(updated_at__date__gte=data_inicio)
         if data_fim:
             qs_final = qs_final.filter(updated_at__date__lte=data_fim)
-        if servico_id:
-            qs_final = qs_final.filter(servico_pericial_id=servico_id)
 
         por_mes_finalizacao = (
             qs_final
@@ -1795,15 +1924,9 @@ class AnalyticsCustodiaView(APIView):
             {'label': 'Não Conforme', 'quantidade': qs.filter(conformidade=False).count()},
         ]
 
-        # Movimentações por mês
-        qs_mov_mes = VestigioMovimentacao.objects.filter(created_at__isnull=False)
-        if data_inicio:
-            qs_mov_mes = qs_mov_mes.filter(created_at__date__gte=data_inicio)
-        if data_fim:
-            qs_mov_mes = qs_mov_mes.filter(created_at__date__lte=data_fim)
-
+        # Movimentações por mês (escopo de perfil/serviço + janela de data já em qs_mov)
         por_mes_mov = (
-            qs_mov_mes
+            qs_mov.filter(created_at__isnull=False)
             .annotate(mes=TruncMonth('created_at'))
             .values('mes')
             .annotate(quantidade=Count('id'))
@@ -1833,9 +1956,9 @@ class AnalyticsCustodiaView(APIView):
             .order_by('mes')
         )
 
-        # Matriz Serviço × Status
+        # Matriz Serviço × Status (mesmo escopo/filtros dos cards de status)
         matriz_raw = (
-            Vestigio.objects.values('servico_pericial__sigla', 'status')
+            qs.values('servico_pericial__sigla', 'status')
             .annotate(quantidade=Count('id'))
             .order_by('servico_pericial__sigla', 'status')
         )
@@ -1855,13 +1978,13 @@ class AnalyticsCustodiaView(APIView):
         limite_vest = agora - timedelta(days=30)
 
         movs_pendentes = (
-            VestigioMovimentacao.objects.filter(aceito=False, created_at__lte=limite_mov)
+            qs_mov_base.filter(aceito=False, created_at__lte=limite_mov)
             .select_related('vestigio', 'servico_pericial', 'created_by')
             .order_by('created_at')[:20]
         )
 
         vest_parados = (
-            Vestigio.objects.filter(
+            qs_base.filter(
                 status=Vestigio.Status.ANDAMENTO,
                 updated_at__lte=limite_vest,
             )

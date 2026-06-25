@@ -360,12 +360,14 @@ class VestigioMovimentacaoListSerializer(serializers.ModelSerializer):
         if not request or not request.user.is_authenticated:
             return False
         user = request.user
-        if getattr(user, 'is_superuser', False) or user.perfil in {'ADMINISTRATIVO', 'SUPER_ADMIN'}:
+        # Override global: SUPER_ADMIN. ADMINISTRATIVO NÃO — recebe só por lotação.
+        if getattr(user, 'is_superuser', False) or user.perfil == 'SUPER_ADMIN':
             return True
         # CUSTODIANTE pode aceitar, mas nunca a sua própria movimentação (ele é o emissor)
         if user.perfil == 'CUSTODIANTE':
             return obj.created_by_id != user.pk
-        # Quem está no serviço de destino pode aceitar (lógica Java isMesmoServicoPericial)
+        # PERITO / OPERACIONAL / ADMINISTRATIVO: só se lotado no serviço de destino
+        # (lógica Java isMesmoServicoPericial)
         if obj.servico_pericial_id:
             return user.servicos_periciais.filter(id=obj.servico_pericial_id).exists()
         # EXTERNO da mesma unidade demandante

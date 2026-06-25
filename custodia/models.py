@@ -304,6 +304,10 @@ class FichaVestigioRegistro(models.Model):
         related_name='fichas_emitidas',
     )
     vestigio_lacre   = models.CharField(max_length=255, blank=True)
+    # Digest SHA-256 do snapshot do vestígio + movimentações no momento da emissão.
+    # Permite verificar a integridade do CONTEÚDO impresso (não apenas a emissão):
+    # se a ficha for adulterada, o hash recomputado não confere com este registro.
+    conteudo_hash    = models.CharField(max_length=64, blank=True, db_index=True)
     emitido_por      = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
