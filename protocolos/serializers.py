@@ -154,7 +154,8 @@ class ProtocoloCreateSerializer(serializers.Serializer):
         default=ProtocoloEntrega.TipoEntrega.MATERIAL,
     )
     lacre_na_entrega = serializers.CharField(required=False, allow_blank=True, default='')
-    descricao_material = serializers.CharField()
+    # Derivada do vestígio no backend (snapshot imutável); o que vier do front é ignorado.
+    descricao_material = serializers.CharField(required=False, allow_blank=True, default='')
 
     ocorrencia_id = serializers.IntegerField()
     procedimento_id = serializers.IntegerField(required=False, allow_null=True)

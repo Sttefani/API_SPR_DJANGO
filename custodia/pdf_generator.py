@@ -444,6 +444,9 @@ def gerar_ficha_vestigio(vestigio, request):
         st_v = st_dado_valor_alerta if alerta else st_dado_valor
         return [Paragraph(label, st_dado_label), Paragraph(_vazio(valor), st_v)]
 
+    _reg_serv = vestigio.servicos_do_registrante()
+    _orig_txt, _orig_inf = vestigio.origem_display()
+
     ident_pares = [
         _linha('Nº Registro', f'#{vestigio.id}'),
         _linha('Lacre', vestigio.lacre or 'SEM LACRE — Não conforme', alerta=not vestigio.conformidade and not vestigio.lacre),
@@ -451,10 +454,12 @@ def gerar_ficha_vestigio(vestigio, request):
         _linha('Ocorrência / Ano', f"{vestigio.ocorrencia or '—'}{f' / {vestigio.ano_ocorrencia}' if vestigio.ano_ocorrencia else ''}"),
         _linha('Material Biológico', 'SIM' if vestigio.biologico else 'NÃO'),
         _linha('Em Conformidade', 'SIM' if vestigio.conformidade else 'NÃO — Vestígio não conforme', alerta=not vestigio.conformidade),
-        _linha('Serviço Pericial', str(vestigio.servico_pericial) if vestigio.servico_pericial else '—'),
+        _linha('Serviço de origem',
+               _orig_txt + (' (serviço do registrante)' if _orig_inf else '')),
         _linha('Unidade Demandante', str(vestigio.unidade_demandante) if vestigio.unidade_demandante else '—'),
         _linha('Autoridade requisitante', str(vestigio.autoridade) if vestigio.autoridade else '—'),
-        _linha('Registrado por', vestigio.get_responsavel()),
+        _linha('Registrado por',
+               vestigio.get_responsavel() + (f' ({_reg_serv})' if _reg_serv else '')),
         _linha('Data / Hora Registro', _formatar_dt(vestigio.created_at)),
         _linha('', ''),  # padding de grade
     ]
@@ -492,10 +497,29 @@ def gerar_ficha_vestigio(vestigio, request):
     else:
         custodiante_txt = '—'
 
+    # Localização ATUAL (dinâmica): destino da última movimentação aceita —
+    # serviço interno OU unidade externa; sem movimentação aceita, o serviço de posse.
+    _ult_aceita = (
+        VestigioMovimentacao.objects
+        .filter(vestigio=vestigio, aceito=True)
+        .select_related('servico_pericial', 'unidade_demandante')
+        .order_by('-data_hora_aceito', '-created_at')
+        .first()
+    )
+    if _ult_aceita and _ult_aceita.servico_pericial:
+        loc_atual_txt = f'{_ult_aceita.servico_pericial} (serviço pericial)'
+    elif _ult_aceita and _ult_aceita.unidade_demandante:
+        loc_atual_txt = f'{_ult_aceita.unidade_demandante} (unidade externa)'
+    elif vestigio.servico_pericial:
+        loc_atual_txt = f'{vestigio.servico_pericial} (serviço pericial)'
+    else:
+        loc_atual_txt = '—'
+
     _adicionar_secao(story, st, '2. SITUAÇÃO ATUAL')
 
     sit_linhas = [
         [Paragraph('Status', st_dado_label), Paragraph(f'<b>{vestigio.get_status_display().upper()}</b>', st_dado_valor)],
+        [Paragraph('Localização atual', st_dado_label), Paragraph(loc_atual_txt, st_dado_valor)],
     ]
 
     if not finalizado:

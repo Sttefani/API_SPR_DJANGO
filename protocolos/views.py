@@ -185,7 +185,9 @@ class ProtocoloEntregaViewSet(viewsets.ModelViewSet):
                 tipo_entrega=data['tipo_entrega'],
                 vestigio=vestigio,
                 lacre_na_entrega=data.get('lacre_na_entrega') or vestigio.lacre or '',
-                descricao_material=data['descricao_material'],
+                # Snapshot IMUTÁVEL da descrição do vestígio — a descrição não é editável
+                # na emissão do protocolo (eventos/notas vão no campo observações).
+                descricao_material=vestigio.descricao or '',
                 ocorrencia=ocorrencia,
                 procedimento=procedimento,
                 autoridade=autoridade,

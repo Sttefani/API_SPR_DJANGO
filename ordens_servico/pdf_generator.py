@@ -90,9 +90,14 @@ def adicionar_secao_tramitacao(story, ordem_servico, styles):
     story.append(Spacer(1, 0.2*cm))
 
     # Dados de ciência
-    if ordem_servico.ciente_por:
+    if ordem_servico.data_ciencia:
         data_ciencia = ordem_servico.data_ciencia.strftime('%d/%m/%Y às %H:%M') if ordem_servico.data_ciencia else "N/D"
-        perito_ciente = ordem_servico.ciente_por.nome_completo
+        if ordem_servico.ciencia_automatica:
+            perito_ciente = "Sistema - ciencia automatica por inercia do servidor"
+        elif ordem_servico.ciente_por:
+            perito_ciente = ordem_servico.ciente_por.nome_completo
+        else:
+            perito_ciente = "N/D"
 
         story.append(Paragraph(
             f"<b>• Ciência em:</b> {data_ciencia}",
@@ -309,9 +314,12 @@ def gerar_pdf_listagem_ordens_servico(ocorrencia, request):
             os_section.append(Paragraph(f"<b>Prazo:</b> {os.prazo_dias} dias", styles['OrdemItem']))
             os_section.append(Paragraph(f"<b>Data Limite:</b> {formatar_data_portugues(os.data_prazo)}", styles['OrdemItem'])) # Add Data Prazo
 
-            if os.ciente_por:
-                 ciencia_data = os.data_ciencia.strftime('%d/%m/%Y às %H:%M') if os.data_ciencia else "N/D"
-                 os_section.append(Paragraph(f"<b>Ciência:</b> {os.ciente_por.nome_completo} em {ciencia_data}", styles['OrdemItem']))
+            if os.data_ciencia:
+                 ciencia_data = os.data_ciencia.strftime('%d/%m/%Y às %H:%M')
+                 if os.ciencia_automatica:
+                     os_section.append(Paragraph(f"<b>Ciência:</b> automática (inércia) em {ciencia_data}", styles['OrdemItem']))
+                 else:
+                     os_section.append(Paragraph(f"<b>Ciência:</b> {os.ciente_por.nome_completo if os.ciente_por else 'N/D'} em {ciencia_data}", styles['OrdemItem']))
             else:
                  os_section.append(Paragraph("<b>Ciência:</b> Aguardando", styles['OrdemItem']))
 
@@ -458,9 +466,13 @@ def gerar_pdf_oficial_ordem_servico(ordem_servico, request):
         story.append(Spacer(1, 0.8*cm))
         story.append(Paragraph("CIÊNCIA DO PERITO:", styles['CampoOficial']))
 
-        if ordem_servico.ciente_por:
-            ciencia_data = ordem_servico.data_ciencia.strftime('%d/%m/%Y às %H:%M') if ordem_servico.data_ciencia else "N/D"
-            story.append(Paragraph(f"Registrada em {ciencia_data}", styles['CampoOficial']))
+        if ordem_servico.data_ciencia:
+            ciencia_data = ordem_servico.data_ciencia.strftime('%d/%m/%Y às %H:%M')
+            if ordem_servico.ciencia_automatica:
+                story.append(Paragraph(f"Ciência automática por inércia em {ciencia_data}", styles['CampoOficial']))
+                story.append(Paragraph("(servidor não deu ciência no prazo regulamentar)", styles['CampoOficial']))
+            else:
+                story.append(Paragraph(f"Registrada em {ciencia_data}", styles['CampoOficial']))
         else:
             story.append(Spacer(1, 0.6*cm))
             story.append(Paragraph("_" * 50, styles['Assinatura']))

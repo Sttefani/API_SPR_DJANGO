@@ -106,6 +106,17 @@ def _is_externo(user):
     return user.perfil == User.Perfil.EXTERNO
 
 
+# Serviço de custódia central do IC — destino fixo dos vestígios cadastrados por
+# usuários EXTERNO (eles não pertencem a serviço pericial; só entregam à custódia).
+SIGLA_CUSTODIA_IC = 'CUST'
+
+
+def _get_servico_custodia_ic():
+    """Retorna o ServicoPericial da custódia central do IC (sigla CUST) ou None."""
+    from servicos_periciais.models import ServicoPericial
+    return ServicoPericial.objects.filter(sigla=SIGLA_CUSTODIA_IC).first()
+
+
 def _filtra_por_unidade(user):
     """True para perfis que só podem ver dados da própria unidade de lotação."""
     return user.perfil in _PERFIS_UNIDADE
@@ -179,10 +190,14 @@ def _qs_movimentacao_por_perfil(qs, user):
         ud = user.unidade_demandante
         if not ud:
             return qs.none()
+        # EXTERNO só vê movimentações dos VESTÍGIOS que ele pode ver — cadastrados
+        # por ele OU da unidade dele (origem) —, espelhando o filtro de vestígios.
+        # NÃO usar os campos de DESTINO da própria movimentação aqui: isso vazava
+        # movimentações de vestígios de OUTRAS unidades cujo destino fosse a unidade
+        # do externo.
         return qs.filter(
-            Q(unidade_demandante=ud)
-            | Q(created_by=user)
-            | Q(user_destino=user)
+            Q(vestigio__unidade_demandante=ud)
+            | Q(vestigio__created_by=user)
         ).distinct()
 
     # PERITO / OPERACIONAL
@@ -258,9 +273,19 @@ class VestigioViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         kwargs = {'created_by': self.request.user}
-        # EXTERNO: força unidade_demandante para a unidade do próprio usuário
-        if _is_externo(self.request.user) and self.request.user.unidade_demandante:
-            kwargs['unidade_demandante'] = self.request.user.unidade_demandante
+        user = self.request.user
+        if _is_externo(user):
+            # EXTERNO: a origem é a PRÓPRIA UNIDADE; o destino do cadastro é SEMPRE a
+            # custódia central do IC (ele não pertence a serviço pericial e só entrega
+            # o material à custódia). Ambos forçados no backend — não confiar no front.
+            if user.unidade_demandante:
+                kwargs['unidade_demandante'] = user.unidade_demandante
+            custodia = _get_servico_custodia_ic()
+            if not custodia:
+                raise ValidationError(
+                    {'detail': 'Serviço de custódia do IC (CUST) não configurado. Contate o administrador.'}
+                )
+            kwargs['servico_pericial'] = custodia
         serializer.save(**kwargs)
 
     def perform_update(self, serializer):
@@ -280,14 +305,13 @@ class VestigioViewSet(viewsets.ModelViewSet):
                 {"detail": "Não é permitido alterar um vestígio FINALIZADO."}
             )
 
-        # Apenas autor do cadastro ou ADMIN/SUPER_ADMIN pode editar (espelho do VestigioService.update)
-        _is_admin = (
-            user.perfil in {User.Perfil.ADMINISTRATIVO, User.Perfil.SUPER_ADMIN}
-            or user.is_superuser
-        )
-        if not _is_admin and instance.created_by != user:
+        # Edição restrita a quem está lotado no serviço pericial onde o vestígio
+        # foi cadastrado (cadeia de custódia). ADMINISTRATIVO/CUSTODIANTE NÃO têm
+        # override global — apenas SUPER_ADMIN (break-glass). Ver Vestigio.pode_editar_por_lotacao.
+        if not instance.pode_editar_por_lotacao(user):
             raise ValidationError(
-                {"detail": "Apenas o autor do cadastro ou um administrador pode editar este vestígio."}
+                {"detail": "Somente peritos lotados no serviço pericial onde o vestígio foi "
+                           "cadastrado podem editá-lo (integridade da cadeia de custódia)."}
             )
 
         serializer.save(updated_by=user)
@@ -483,6 +507,8 @@ class VestigioViewSet(viewsets.ModelViewSet):
 
         vestigio.updated_by = request.user
         vestigio.save(update_fields=['updated_by', 'updated_at'])
+        # Mantém ocorrencia/ano_ocorrencia espelhando a ocorrência vinculada
+        vestigio.sincronizar_ocorrencia_principal()
 
         return Response({
             'message': msg,
@@ -654,6 +680,30 @@ class VestigioViewSet(viewsets.ModelViewSet):
             }
             for v in qs
         ]
+        return Response(data)
+
+    @action(detail=False, methods=['get'], url_path='ocorrencias-autocomplete')
+    def ocorrencias_autocomplete(self, request):
+        """
+        Typeahead de OCORRÊNCIAS por número (parcial) — para vincular ao vestígio.
+        ?valor=<string> filtra por numero_ocorrencia (icontains). Retorna até 20
+        resultados mínimos (id, numero_ocorrencia). Leitura read-only do módulo de
+        ocorrências (não o modifica); acesso PodeVerCustodia (default do viewset).
+
+        EXTERNO só localiza ocorrências da PRÓPRIA unidade demandante (mesma
+        restrição da visibilidade de vestígios) — sem unidade, não vê nada.
+        """
+        from ocorrencias.models import Ocorrencia
+        valor = request.query_params.get('valor', '').strip()
+        if not valor:
+            return Response([])
+        qs = Ocorrencia.objects.filter(numero_ocorrencia__icontains=valor)
+        if _is_externo(request.user):
+            if not request.user.unidade_demandante_id:
+                return Response([])
+            qs = qs.filter(unidade_demandante_id=request.user.unidade_demandante_id)
+        qs = qs.order_by('-id').only('id', 'numero_ocorrencia')[:20]
+        data = [{'id': o.id, 'numero_ocorrencia': o.numero_ocorrencia} for o in qs]
         return Response(data)
 
     @action(detail=False, methods=['get'], url_path='dashboard')
@@ -941,8 +991,8 @@ class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
         darAceite — espelho de VestigioMovimentacaoService.darAceite.
 
         Quem pode aceitar:
-        - ADMIN / SUPER_ADMIN / CUSTODIANTE: sempre
-        - Mesmo serviço pericial da movimentação
+        - SUPER_ADMIN / CUSTODIANTE: sempre (override global)
+        - PERITO / OPERACIONAL / ADMINISTRATIVO: só se lotado no serviço pericial da movimentação
         - EXTERNO da mesma unidade demandante
 
         Ao aceitar, user_destino da movimentação e do vestígio passam

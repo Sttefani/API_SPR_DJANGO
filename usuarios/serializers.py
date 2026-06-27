@@ -99,6 +99,7 @@ class UserManagementSerializer(serializers.ModelSerializer):
             "email",
             "cpf",
             "telefone_celular",
+            "matricula",
             "data_nascimento",
             "status",
             "perfil",

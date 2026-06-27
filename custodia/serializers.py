@@ -107,6 +107,7 @@ class VestigioListSerializer(serializers.ModelSerializer):
 class VestigioDetailSerializer(serializers.ModelSerializer):
     unidade_demandante = UnidadeResumoSerializer(read_only=True)
     servico_pericial   = ServicoResumoSerializer(read_only=True)
+    servico_pericial_origem = ServicoResumoSerializer(read_only=True)  # origem imutável (cadastro)
     autoridade         = AutoridadeResumoSerializer(read_only=True)
     user_destino       = UsuarioResumoSerializer(read_only=True)
     created_by         = UsuarioResumoSerializer(read_only=True)
@@ -119,12 +120,53 @@ class VestigioDetailSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
 
     registrado_por  = serializers.SerializerMethodField()
+    registrado_por_servico = serializers.SerializerMethodField()
     atualizado_por  = serializers.SerializerMethodField()
     pode_movimentar = serializers.SerializerMethodField()
     pode_editar     = serializers.SerializerMethodField()
+    localizacao_atual = serializers.SerializerMethodField()
+    servico_origem_nome     = serializers.SerializerMethodField()
+    servico_origem_inferido = serializers.SerializerMethodField()
 
     def get_registrado_por(self, obj):
         return obj.get_responsavel()
+
+    def get_registrado_por_servico(self, obj):
+        """Serviço(s) do registrante (created_by) — '' se indisponível."""
+        return obj.servicos_do_registrante()
+
+    def get_servico_origem_nome(self, obj):
+        texto, _ = obj.origem_display()
+        return texto
+
+    def get_servico_origem_inferido(self, obj):
+        _, inferido = obj.origem_display()
+        return inferido
+
+    def get_localizacao_atual(self, obj):
+        """
+        Onde o vestígio está AGORA (dinâmico): destino da última movimentação
+        aceita — serviço interno OU unidade externa. Sem movimentação aceita,
+        permanece no serviço de cadastro/posse atual. Distinto da origem imutável.
+        """
+        ultima = (
+            VestigioMovimentacao.objects
+            .filter(vestigio=obj, aceito=True)
+            .select_related('servico_pericial', 'unidade_demandante')
+            .order_by('-data_hora_aceito', '-created_at')
+            .first()
+        )
+        if ultima:
+            if ultima.servico_pericial_id:
+                s = ultima.servico_pericial
+                return {'tipo': 'servico', 'sigla': s.sigla, 'nome': s.nome}
+            if ultima.unidade_demandante_id:
+                u = ultima.unidade_demandante
+                return {'tipo': 'unidade', 'sigla': u.sigla, 'nome': u.nome}
+        if obj.servico_pericial_id:
+            s = obj.servico_pericial
+            return {'tipo': 'servico', 'sigla': s.sigla, 'nome': s.nome}
+        return None
 
     def get_atualizado_por(self, obj):
         if obj.updated_by:
@@ -133,12 +175,18 @@ class VestigioDetailSerializer(serializers.ModelSerializer):
 
     def get_pode_editar(self, obj):
         """
-        False quando já existe qualquer movimentação — a cadeia de custódia é imutável
-        a partir do primeiro movimento registrado, independente do status atual.
+        Editável apenas: (1) não finalizado, (2) sem nenhuma movimentação (cadeia
+        de custódia imutável a partir do 1º movimento) e (3) pelo usuário lotado no
+        serviço pericial de cadastro (ou SUPER_ADMIN). Espelha o perform_update.
         """
         if obj.status == 'FINALIZADO':
             return False
-        return not VestigioMovimentacao.objects.filter(vestigio=obj).exists()
+        if VestigioMovimentacao.objects.filter(vestigio=obj).exists():
+            return False
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        return obj.pode_editar_por_lotacao(request.user)
 
     def get_pode_movimentar(self, obj):
         """
@@ -188,11 +236,13 @@ class VestigioDetailSerializer(serializers.ModelSerializer):
             'id', 'lacre', 'num_processo_sei', 'conformidade', 'biologico',
             'ocorrencia', 'ano_ocorrencia', 'status', 'status_display',
             'descricao', 'saiu_da_custodia', 'motivo_finalizacao',
-            'unidade_demandante', 'servico_pericial', 'autoridade',
+            'unidade_demandante', 'servico_pericial', 'servico_pericial_origem',
+            'servico_origem_nome', 'servico_origem_inferido',
+            'localizacao_atual', 'autoridade',
             'user_destino', 'procedimentos', 'ocorrencias_vinculadas',
             'vestigio_contra_prova', 'vestigio_contra_prova_lacre',
-            'created_by', 'updated_by', 'registrado_por', 'atualizado_por',
-            'created_at', 'updated_at', 'pode_movimentar', 'pode_editar',
+            'created_by', 'updated_by', 'registrado_por', 'registrado_por_servico',
+            'atualizado_por', 'created_at', 'updated_at', 'pode_movimentar', 'pode_editar',
         ]
 
 
@@ -253,33 +303,31 @@ class VestigioCreateSerializer(serializers.ModelSerializer):
             'procedimentos_ids', 'ocorrencias_vinculadas_ids',
         ]
         read_only_fields = ['id', 'status']
+        # Regra do administrador: lacre e descrição obrigatórios no cadastro.
+        # unidade_demandante_id já é obrigatório (PrimaryKeyRelatedField sem required=False).
+        # Enforcement no backend (nunca confiar só no frontend).
+        extra_kwargs = {
+            'lacre':     {'required': True, 'allow_null': False, 'allow_blank': False},
+            'descricao': {'required': True, 'allow_null': False, 'allow_blank': False},
+        }
 
     def validate(self, data):
         """
-        validacaoDuplicacaoInformacoesVestigio — espelho de VestigioService do Java.
-
-        Bloqueia insert/update quando já existe outro vestígio com o mesmo
-        conjunto: lacre + ocorrencia + ano_ocorrencia + servico_pericial.
-        Todos os 4 campos precisam estar preenchidos para a validação disparar
-        (espelho de ValueValidUtil.isValid do Java).
+        Duplicidade de vestígio. Com ocorrência/ano removidos do cadastro e o
+        lacre agora obrigatório, a chave de unicidade é lacre + servico_pericial
+        (redução natural da chave antiga lacre+ocorrência+ano+serviço do Java).
+        Em PATCH parcial, recai sobre os valores já gravados quando ausentes.
         """
-        lacre          = data.get('lacre')
-        ocorrencia     = data.get('ocorrencia')
-        ano_ocorrencia = data.get('ano_ocorrencia')
-        servico        = data.get('servico_pericial')
+        lacre   = data.get('lacre')           or (self.instance.lacre           if self.instance else None)
+        servico = data.get('servico_pericial') or (self.instance.servico_pericial if self.instance else None)
 
-        if lacre and ocorrencia and ano_ocorrencia and servico:
-            qs = Vestigio.objects.filter(
-                lacre=lacre,
-                ocorrencia=ocorrencia,
-                ano_ocorrencia=ano_ocorrencia,
-                servico_pericial=servico,
-            )
+        if lacre and servico:
+            qs = Vestigio.objects.filter(lacre=lacre, servico_pericial=servico)
             if self.instance:
                 qs = qs.exclude(pk=self.instance.pk)
             if qs.exists():
                 raise serializers.ValidationError(
-                    {'detail': 'Informações duplicadas. Já existe um vestígio com esse lacre, ocorrência, ano e serviço pericial.'}
+                    {'detail': 'Já existe um vestígio com esse lacre neste serviço pericial.'}
                 )
 
         return data
@@ -301,6 +349,8 @@ class VestigioCreateSerializer(serializers.ModelSerializer):
                 ).filter(pk=oc.pk, procedimento_cadastrado__isnull=False).first()
                 if oc_com_proc:
                     vestigio.procedimentos.add(oc_com_proc.procedimento_cadastrado)
+            # Auto-preenche ocorrencia/ano_ocorrencia a partir da ocorrência vinculada
+            vestigio.sincronizar_ocorrencia_principal()
 
         return vestigio
 
@@ -317,6 +367,8 @@ class VestigioCreateSerializer(serializers.ModelSerializer):
             for oc in ocorrencias:
                 if oc.procedimento_cadastrado:
                     instance.procedimentos.add(oc.procedimento_cadastrado)
+            # Mantém ocorrencia/ano_ocorrencia em sincronia com o vínculo
+            instance.sincronizar_ocorrencia_principal()
         return instance
 
 
@@ -340,10 +392,33 @@ class VestigioMovimentacaoListSerializer(serializers.ModelSerializer):
     # Usa get_responsavel() — prioriza created_by, cai para responsavel_nome (ETL)
     criado_por    = serializers.SerializerMethodField()
     pode_aceitar  = serializers.SerializerMethodField()
+    pode_editar   = serializers.SerializerMethodField()
     sou_o_emissor = serializers.SerializerMethodField()
 
     def get_criado_por(self, obj):
         return obj.get_responsavel()
+
+    def get_pode_editar(self, obj):
+        """
+        Espelha VestigioMovimentacaoViewSet.perform_update: editável apenas
+        ANTES do aceite, com vestígio não finalizado, e somente pelo criador
+        (emissor do passe) ou ADMINISTRATIVO/SUPER_ADMIN.
+        """
+        if obj.aceito:
+            return False
+        if obj.vestigio_id and obj.vestigio.status == 'FINALIZADO':
+            return False
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        # EXTERNO é bloqueado no update pelo PodeCustodiar — não exibir o botão.
+        if user.perfil == 'EXTERNO':
+            return False
+        if (getattr(user, 'is_superuser', False)
+                or user.perfil in ('ADMINISTRATIVO', 'SUPER_ADMIN')):
+            return True
+        return obj.created_by_id == user.pk
 
     def get_sou_o_emissor(self, obj):
         """True se o usuário autenticado foi quem criou esta movimentação."""
@@ -381,7 +456,7 @@ class VestigioMovimentacaoListSerializer(serializers.ModelSerializer):
             'id', 'vestigio', 'lacre', 'num_processo_sei', 'descricao',
             'aceito', 'data_hora_aceito',
             'unidade_demandante', 'servico_pericial', 'autoridade_nome',
-            'user_destino', 'criado_por', 'created_at', 'pode_aceitar', 'sou_o_emissor',
+            'user_destino', 'criado_por', 'created_at', 'pode_aceitar', 'pode_editar', 'sou_o_emissor',
         ]
 
 

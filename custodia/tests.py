@@ -13,7 +13,9 @@ Restrições de perfil:
   SUPER_ADMIN    → poder total, único que pode DELETE
 """
 
+import datetime
 import uuid
+from unittest.mock import patch, MagicMock
 
 from django.test import TestCase
 from django.urls import reverse
@@ -87,6 +89,8 @@ class CustodiaBaseTest(APITestCase):
         self.client = APIClient()
         self.unidade = _criar_unidade()
         self.servico = _criar_servico()
+        # Custódia central do IC — destino fixo dos vestígios de usuário EXTERNO
+        self.custodia_ic = _criar_servico('CUST', 'CUSTÓDIA ICPDA')
 
         # Usuários com perfis distintos
         self.perito       = _criar_usuario('perito@test.com',       perfil=User.Perfil.PERITO,          unidade=self.unidade)
@@ -109,6 +113,7 @@ class CustodiaBaseTest(APITestCase):
             'lacre':                lacre,
             'unidade_demandante_id': self.unidade.pk,
             'servico_pericial_id':   self.servico.pk,
+            'descricao':             'Material de teste',
         })
 
     def _criar_movimentacao_via_api(self, vestigio_id, usuario=None):
@@ -164,12 +169,11 @@ class VestgioCriacaoTest(CustodiaBaseTest):
         r = self._criar_vestigio_via_api(self.custodiante)
         self.assertEqual(r.status_code, status.HTTP_201_CREATED)
 
-    def test_duplicata_mesmo_lacre_ocorrencia_ano_servico(self):
-        """Dois vestígios com mesmo lacre+ocorrência+ano+serviço devem ser bloqueados."""
+    def test_duplicata_lacre_mesmo_servico(self):
+        """Dois vestígios com o mesmo lacre no mesmo serviço pericial são bloqueados."""
         dados = {
-            'lacre':                'DUP-001',
-            'ocorrencia':           '1234/2026',
-            'ano_ocorrencia':       2026,
+            'lacre':                 'DUP-001',
+            'descricao':             'Material X',
             'unidade_demandante_id': self.unidade.pk,
             'servico_pericial_id':   self.servico.pk,
         }
@@ -179,17 +183,67 @@ class VestgioCriacaoTest(CustodiaBaseTest):
         r2 = self.client.post('/api/custodia/vestigios/', dados)
         self.assertEqual(r2.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_sem_lacre_mesmo_servico_nao_bloqueia(self):
-        """Vestígios sem lacre não disparam validação de duplicata."""
-        dados = {
+    def test_mesmo_lacre_servicos_diferentes_ok(self):
+        """Mesmo lacre em serviços diferentes é permitido (unicidade é por serviço)."""
+        outro_servico = _criar_servico('BIO', 'Biologia')
+        base = {
+            'lacre':                 'DUP-002',
+            'descricao':             'Material Y',
             'unidade_demandante_id': self.unidade.pk,
-            'servico_pericial_id':   self.servico.pk,
         }
         self.autenticar(self.perito)
-        r1 = self.client.post('/api/custodia/vestigios/', dados)
-        r2 = self.client.post('/api/custodia/vestigios/', dados)
+        r1 = self.client.post('/api/custodia/vestigios/', {**base, 'servico_pericial_id': self.servico.pk})
+        r2 = self.client.post('/api/custodia/vestigios/', {**base, 'servico_pericial_id': outro_servico.pk})
         self.assertEqual(r1.status_code, status.HTTP_201_CREATED)
         self.assertEqual(r2.status_code, status.HTTP_201_CREATED)
+
+    def test_lacre_obrigatorio(self):
+        """Lacre é obrigatório no cadastro (regra do administrador)."""
+        self.autenticar(self.perito)
+        r = self.client.post('/api/custodia/vestigios/', {
+            'descricao':             'Sem lacre',
+            'unidade_demandante_id': self.unidade.pk,
+            'servico_pericial_id':   self.servico.pk,
+        })
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_descricao_obrigatoria(self):
+        """Descrição é obrigatória no cadastro (regra do administrador)."""
+        self.autenticar(self.perito)
+        r = self.client.post('/api/custodia/vestigios/', {
+            'lacre':                 'LAC-DESC',
+            'unidade_demandante_id': self.unidade.pk,
+            'servico_pericial_id':   self.servico.pk,
+        })
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_unidade_obrigatoria(self):
+        """Unidade demandante é obrigatória no cadastro."""
+        self.autenticar(self.perito)
+        r = self.client.post('/api/custodia/vestigios/', {
+            'lacre':               'LAC-UNI',
+            'descricao':           'Sem unidade',
+            'servico_pericial_id': self.servico.pk,
+        })
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cria_contraprova_grava_vinculo(self):
+        """Criar um vestígio como contraprova grava o FK vestigio_contra_prova
+        e ele aparece na lista de contraprovas do original."""
+        original = _criar_vestigio(self.unidade, self.servico, self.perito, lacre='ORIG-CP')
+        self.autenticar(self.perito)
+        r = self.client.post('/api/custodia/vestigios/', {
+            'lacre':                    'CONTRAPROVA-1',
+            'descricao':                'Contraprova de teste',
+            'unidade_demandante_id':    self.unidade.pk,
+            'servico_pericial_id':      self.servico.pk,
+            'vestigio_contra_prova_id': original.pk,
+        })
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+        cp = Vestigio.objects.get(pk=r.data['id'])
+        self.assertEqual(cp.vestigio_contra_prova_id, original.pk)
+        r2 = self.client.get(f'/api/custodia/vestigios/{original.pk}/contra-provas/')
+        self.assertIn(cp.pk, [v['id'] for v in r2.data])
 
 
 # ---------------------------------------------------------------------------
@@ -925,3 +979,327 @@ class AnalyticsVisibilidadeTest(CustodiaBaseTest):
     def test_filtro_servico_restringe_para_quem_ve_tudo(self):
         total = self._total(self.custodiante, f'?servico_pericial_id={self.servico_b.pk}')
         self.assertEqual(total, 1)  # só BIO-1
+
+
+# ---------------------------------------------------------------------------
+# 15. Auto-preenchimento de ocorrencia/ano_ocorrencia a partir do vínculo
+# ---------------------------------------------------------------------------
+
+class SincronizarOcorrenciaPrincipalTest(CustodiaBaseTest):
+    """
+    Os campos texto ocorrencia/ano_ocorrencia saíram do formulário de cadastro,
+    mas continuam alimentando a FAV/listagens — então são preenchidos
+    automaticamente a partir da PRIMEIRA ocorrência vinculada (fonte única).
+    """
+
+    def _sincronizar_com_oc(self, vestigio, numero, data_fato):
+        fake_oc = MagicMock(numero_ocorrencia=numero, data_fato=data_fato)
+        qs = MagicMock()
+        qs.order_by.return_value.first.return_value = fake_oc
+        with patch.object(Vestigio, 'ocorrencias_vinculadas', qs):
+            vestigio.sincronizar_ocorrencia_principal()
+        vestigio.refresh_from_db()
+
+    def test_ano_vem_do_numero_da_ocorrencia(self):
+        """O ano vem dos 2 primeiros dígitos do número (2026), não do data_fato (2025)."""
+        v = _criar_vestigio(self.unidade, self.servico, self.perito, lacre='SYNC-FILL')
+        self._sincronizar_com_oc(v, '2612300045/SETEC', datetime.date(2025, 12, 28))
+        self.assertEqual(v.ocorrencia, '2612300045/SETEC')
+        self.assertEqual(v.ano_ocorrencia, 2026)
+
+    def test_ano_fallback_data_fato_quando_numero_atipico(self):
+        """Número fora do padrão AAMM… → ano cai para o data_fato (dados legados)."""
+        v = _criar_vestigio(self.unidade, self.servico, self.perito, lacre='SYNC-LEG')
+        self._sincronizar_com_oc(v, 'LEGADO-XYZ', datetime.date(2019, 3, 1))
+        self.assertEqual(v.ano_ocorrencia, 2019)
+
+    def test_limpa_quando_sem_vinculo(self):
+        v = _criar_vestigio(self.unidade, self.servico, self.perito, lacre='SYNC-CLEAR')
+        v.ocorrencia = 'ANTIGO/2020'
+        v.ano_ocorrencia = 2020
+        v.save()
+        v.sincronizar_ocorrencia_principal()  # nenhuma ocorrência vinculada
+        v.refresh_from_db()
+        self.assertIsNone(v.ocorrencia)
+        self.assertIsNone(v.ano_ocorrencia)
+
+
+# ---------------------------------------------------------------------------
+# 16. Edição de vestígio — restrita à lotação no serviço de cadastro
+# ---------------------------------------------------------------------------
+
+class EdicaoVestigioTest(CustodiaBaseTest):
+    """
+    Editar um vestígio antes da 1ª movimentação só pode ser feito por quem está
+    lotado no serviço pericial onde foi cadastrado (cadeia de custódia).
+    ADMINISTRATIVO/CUSTODIANTE sem lotação NÃO editam; SUPER_ADMIN é break-glass.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.vest = _criar_vestigio(self.unidade, self.servico, self.perito, lacre='EDIT-1')
+
+    def _editar(self, usuario, dados=None):
+        self.autenticar(usuario)
+        return self.client.patch(
+            f'/api/custodia/vestigios/{self.vest.pk}/',
+            dados or {'descricao': 'Nova descrição'},
+        )
+
+    def test_perito_lotado_no_servico_edita(self):
+        self.perito.servicos_periciais.add(self.servico)
+        self.assertEqual(self._editar(self.perito).status_code, status.HTTP_200_OK)
+
+    def test_perito_de_outro_servico_nao_edita(self):
+        """
+        Perito de outro serviço nem ENXERGA o vestígio (filtro de visibilidade) →
+        404 (resposta opaca). Já o ADMINISTRATIVO vê tudo, então é barrado na
+        edição com 400 (ver test_administrativo_sem_lotacao_nao_edita).
+        """
+        outro = _criar_usuario('peritoX@test.com', perfil=User.Perfil.PERITO)
+        outro.servicos_periciais.add(_criar_servico('BIO', 'Biologia'))
+        self.assertEqual(self._editar(outro).status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_administrativo_sem_lotacao_nao_edita(self):
+        """ADMINISTRATIVO de outro serviço NÃO edita (era o comportamento relatado)."""
+        self.assertEqual(self._editar(self.admin).status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_administrativo_lotado_edita(self):
+        self.admin.servicos_periciais.add(self.servico)
+        self.assertEqual(self._editar(self.admin).status_code, status.HTTP_200_OK)
+
+    def test_custodiante_sem_lotacao_nao_edita(self):
+        self.assertEqual(self._editar(self.custodiante).status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_super_admin_edita_qualquer(self):
+        self.assertEqual(self._editar(self.super_admin).status_code, status.HTTP_200_OK)
+
+    def test_pode_editar_reflete_lotacao(self):
+        self.autenticar(self.admin)  # sem lotação
+        r = self.client.get(f'/api/custodia/vestigios/{self.vest.pk}/')
+        self.assertFalse(r.data['pode_editar'])
+        self.admin.servicos_periciais.add(self.servico)
+        r2 = self.client.get(f'/api/custodia/vestigios/{self.vest.pk}/')
+        self.assertTrue(r2.data['pode_editar'])
+
+
+# ---------------------------------------------------------------------------
+# 17. Edição de movimentação — permitida só até antes do aceite
+# ---------------------------------------------------------------------------
+
+class EdicaoMovimentacaoTest(CustodiaBaseTest):
+    """
+    A movimentação pode ser editada pelo criador (emissor) enquanto não for
+    aceita. Após o aceite, torna-se imutável (cadeia de custódia).
+    """
+
+    def setUp(self):
+        super().setUp()
+        r_vest = self._criar_vestigio_via_api()
+        self.vest_id = r_vest.data['id']
+        r_mov = self._criar_movimentacao_via_api(self.vest_id, usuario=self.perito)
+        self.mov_id = r_mov.data['id']
+
+    def _patch(self, usuario, dados):
+        self.autenticar(usuario)
+        return self.client.patch(f'/api/custodia/movimentacoes/{self.mov_id}/', dados)
+
+    def test_criador_edita_movimentacao_pendente(self):
+        r = self._patch(self.perito, {'lacre': 'LACRE-NOVO-1', 'descricao': 'Corrigido'})
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        mov = VestigioMovimentacao.objects.get(pk=self.mov_id)
+        self.assertEqual(mov.lacre, 'LACRE-NOVO-1')
+        self.assertEqual(mov.descricao, 'Corrigido')
+
+    def test_nao_edita_apos_aceite(self):
+        self._aceitar_movimentacao(self.mov_id, usuario=self.custodiante)
+        r = self._patch(self.perito, {'descricao': 'Tentativa pós-aceite'})
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_pode_editar_true_antes_false_depois(self):
+        self.autenticar(self.perito)
+        movs = self.client.get(f'/api/custodia/vestigios/{self.vest_id}/movimentacoes/').data
+        self.assertTrue(movs[0]['pode_editar'])
+        self._aceitar_movimentacao(self.mov_id, usuario=self.custodiante)
+        self.autenticar(self.perito)
+        movs2 = self.client.get(f'/api/custodia/vestigios/{self.vest_id}/movimentacoes/').data
+        self.assertFalse(movs2[0]['pode_editar'])
+
+    def test_externo_nao_edita_movimentacao(self):
+        """EXTERNO é bloqueado no update pelo PodeCustodiar (403/404), nunca 200."""
+        self.autenticar(self.externo)
+        r = self.client.patch(
+            f'/api/custodia/movimentacoes/{self.mov_id}/', {'descricao': 'tentativa'}
+        )
+        self.assertIn(r.status_code, (status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND))
+
+
+# ---------------------------------------------------------------------------
+# 18. Serviço de origem — imutável; localização atual dinâmica
+# ---------------------------------------------------------------------------
+
+class OrigemServicoTest(CustodiaBaseTest):
+    """
+    O serviço de ORIGEM (cadastro) é imutável e sempre preservado.
+    `servico_pericial` reflete a LOCALIZAÇÃO atual e muda no aceite de
+    movimentação interna — sem nunca apagar a origem.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.servico_y = _criar_servico('BIO', 'Biologia')
+        r = self._criar_vestigio_via_api()   # cadastrado em self.servico (origem)
+        self.vest_id = r.data['id']
+
+    def _mover_para_y_e_aceitar(self):
+        self.autenticar(self.perito)
+        r_mov = self.client.post('/api/custodia/movimentacoes/', {
+            'vestigio_id':         self.vest_id,
+            'servico_pericial_id': self.servico_y.id,
+            'descricao':           'Transferência para BIO',
+        })
+        self.assertEqual(r_mov.status_code, status.HTTP_201_CREATED)
+        self._aceitar_movimentacao(r_mov.data['id'], usuario=self.custodiante)
+
+    def test_origem_gravada_no_cadastro(self):
+        v = Vestigio.objects.get(pk=self.vest_id)
+        self.assertEqual(v.servico_pericial_origem_id, self.servico.id)
+
+    def test_origem_preservada_apos_movimentacao(self):
+        self._mover_para_y_e_aceitar()
+        v = Vestigio.objects.get(pk=self.vest_id)
+        self.assertEqual(v.servico_pericial_id, self.servico_y.id)         # localização mudou
+        self.assertEqual(v.servico_pericial_origem_id, self.servico.id)    # origem preservada
+
+    def test_detalhe_expoe_origem_e_localizacao(self):
+        self._mover_para_y_e_aceitar()
+        self.autenticar(self.custodiante)  # enxerga tudo
+        r = self.client.get(f'/api/custodia/vestigios/{self.vest_id}/')
+        self.assertEqual(r.data['servico_pericial_origem']['id'], self.servico.id)
+        self.assertEqual(r.data['localizacao_atual']['sigla'], self.servico_y.sigla)
+        self.assertEqual(r.data['localizacao_atual']['tipo'], 'servico')
+
+    def test_aceite_nao_altera_origem_de_outro_aceite(self):
+        """Após dois saltos (X→Y→X de novo não; só Y), origem continua X."""
+        self._mover_para_y_e_aceitar()
+        v = Vestigio.objects.get(pk=self.vest_id)
+        self.assertEqual(v.servico_pericial_origem_id, self.servico.id)
+
+    def test_registrado_por_servico_exposto(self):
+        """O serviço do registrante (created_by) é buscado do banco e exposto."""
+        self.perito.servicos_periciais.add(self.servico)
+        self.autenticar(self.perito)
+        r = self.client.get(f'/api/custodia/vestigios/{self.vest_id}/')
+        self.assertIn(self.servico.sigla, r.data['registrado_por_servico'])
+
+    def test_origem_inferida_do_registrante_quando_historico(self):
+        """Histórico sem origem explícita → infere do serviço do registrante
+        (inferido=True), em vez de 'Não registrada'."""
+        self.perito.servicos_periciais.add(self.servico)
+        v = Vestigio.objects.get(pk=self.vest_id)
+        v.servico_pericial_origem = None            # simula dado histórico (origem perdida)
+        v.save(update_fields=['servico_pericial_origem'])
+        self.autenticar(self.perito)
+        r = self.client.get(f'/api/custodia/vestigios/{self.vest_id}/')
+        self.assertTrue(r.data['servico_origem_inferido'])
+        self.assertIn(self.servico.sigla, r.data['servico_origem_nome'])
+
+    def test_origem_nao_registrada_sem_servico_do_registrante(self):
+        """Sem origem explícita e sem serviço no registrante → 'Não registrada'."""
+        self.perito.servicos_periciais.clear()
+        v = Vestigio.objects.get(pk=self.vest_id)
+        v.servico_pericial_origem = None
+        v.save(update_fields=['servico_pericial_origem'])
+        self.autenticar(self.perito)
+        r = self.client.get(f'/api/custodia/vestigios/{self.vest_id}/')
+        self.assertFalse(r.data['servico_origem_inferido'])
+        self.assertIn('Não registrada', r.data['servico_origem_nome'])
+
+
+# ---------------------------------------------------------------------------
+# 19. EXTERNO — destino fixo na custódia central do IC
+# ---------------------------------------------------------------------------
+
+class ExternoDestinoCustodiaTest(CustodiaBaseTest):
+    """
+    EXTERNO: o destino do cadastro é SEMPRE a custódia central do IC (sigla CUST),
+    forçado pelo backend mesmo que o front envie outro serviço. A ORIGEM do vestígio
+    é a UNIDADE do externo — a custódia é destino, não origem.
+    """
+
+    def _criar_como_externo(self, lacre, servico_id=None, unidade_id=None):
+        self.autenticar(self.externo)
+        return self.client.post('/api/custodia/vestigios/', {
+            'lacre':                 lacre,
+            'descricao':             'Material externo',
+            'unidade_demandante_id': unidade_id or self.unidade.pk,
+            'servico_pericial_id':   servico_id or self.servico.pk,  # tentativa de outro destino
+        })
+
+    def test_destino_forcado_para_custodia_ic(self):
+        r = self._criar_como_externo('EXT-CUST-1')
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+        v = Vestigio.objects.get(pk=r.data['id'])
+        self.assertEqual(v.servico_pericial_id, self.custodia_ic.id)   # forçado p/ CUST
+        self.assertNotEqual(v.servico_pericial_id, self.servico.id)    # ignorou o enviado
+
+    def test_origem_servico_nao_carimbada(self):
+        r = self._criar_como_externo('EXT-CUST-2')
+        v = Vestigio.objects.get(pk=r.data['id'])
+        self.assertIsNone(v.servico_pericial_origem_id)   # custódia é destino, não origem
+
+    def test_origem_display_aponta_para_externa(self):
+        r = self._criar_como_externo('EXT-CUST-3')
+        v = Vestigio.objects.get(pk=r.data['id'])
+        texto, inferido = v.origem_display()
+        self.assertIn('externa', texto.lower())
+        self.assertFalse(inferido)
+
+    def test_unidade_forcada_para_a_do_externo(self):
+        outra = _criar_unidade('XYZ', 'Outra Unidade')
+        r = self._criar_como_externo('EXT-CUST-4', unidade_id=outra.pk)
+        v = Vestigio.objects.get(pk=r.data['id'])
+        self.assertEqual(v.unidade_demandante_id, self.externo.unidade_demandante_id)
+
+    def test_perito_continua_com_origem_servico(self):
+        """Garante que a trava do EXTERNO não afeta o perito (origem = serviço)."""
+        r = self._criar_vestigio_via_api(self.perito, lacre='PER-CUST-1')
+        v = Vestigio.objects.get(pk=r.data['id'])
+        self.assertEqual(v.servico_pericial_origem_id, self.servico.id)
+
+
+# ---------------------------------------------------------------------------
+# 20. EXTERNO — visibilidade de movimentações restrita aos seus vestígios
+# ---------------------------------------------------------------------------
+
+class ExternoVisibilidadeMovimentacaoTest(CustodiaBaseTest):
+    """
+    EXTERNO só enxerga movimentações de vestígios que ele pode ver (cadastrados
+    por ele OU da unidade dele). NÃO vê movimentações de vestígios de OUTRAS
+    unidades — nem quando o destino do passe é a unidade do externo.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.outra_unidade = _criar_unidade('OUTRA', 'Outra Unidade')
+
+    def test_ve_movimentacao_do_proprio_vestigio(self):
+        vest = _criar_vestigio(self.unidade, self.servico, self.externo, lacre='EXT-MOV-1')
+        mov = VestigioMovimentacao.objects.create(
+            vestigio=vest, servico_pericial=self.servico, created_by=self.externo
+        )
+        self.autenticar(self.externo)
+        r = self.client.get('/api/custodia/movimentacoes/')
+        ids = [m['id'] for m in r.data['results']]
+        self.assertIn(mov.id, ids)
+
+    def test_nao_ve_movimentacao_de_outra_unidade(self):
+        """Vazamento corrigido: mov de vestígio de outra unidade, destino = unidade do externo."""
+        vest_outro = _criar_vestigio(self.outra_unidade, self.servico, self.perito, lacre='OUTRO-MOV-1')
+        mov_outro = VestigioMovimentacao.objects.create(
+            vestigio=vest_outro, unidade_demandante=self.unidade, created_by=self.perito
+        )
+        self.autenticar(self.externo)
+        r = self.client.get('/api/custodia/movimentacoes/')
+        ids = [m['id'] for m in r.data['results']]
+        self.assertNotIn(mov_outro.id, ids)

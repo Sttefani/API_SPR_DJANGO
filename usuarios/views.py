@@ -226,7 +226,7 @@ class UserManagementViewSet(
                 "id": user.id,
                 "nome_completo": user.nome_completo,
                 "perfil": user.perfil,
-                "matricula": "",
+                "matricula": user.matricula or "",
             })
         except User.DoesNotExist:
             return Response(None, status=status.HTTP_404_NOT_FOUND)

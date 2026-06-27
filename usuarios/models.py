@@ -120,6 +120,11 @@ class User(AbstractUser, AuditModel):
     telefone_celular = models.CharField(
         max_length=15, unique=True, blank=True, null=True
     )
+    # Matrícula funcional do servidor — usada no Protocolo de Saída (puxada
+    # automaticamente pelo CPF do recebedor). Opcional; nem todo usuário tem.
+    matricula = models.CharField(
+        max_length=30, blank=True, null=True, verbose_name="Matrícula Funcional"
+    )
 
     # Campos de controle do sistema
     status = models.CharField(

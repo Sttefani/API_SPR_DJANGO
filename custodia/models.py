@@ -35,6 +35,16 @@ class Vestigio(AuditModel):
         on_delete=models.PROTECT,
         related_name='vestigios',
     )
+    # Serviço onde o vestígio foi CADASTRADO — origem imutável da cadeia de custódia.
+    # NUNCA é alterado por movimentações (diferente de servico_pericial, que reflete a
+    # localização/posse atual e muda no aceite). Nullable: registros históricos já
+    # movimentados internamente tiveram a origem sobrescrita e não há como recuperá-la.
+    servico_pericial_origem = models.ForeignKey(
+        'servicos_periciais.ServicoPericial',
+        on_delete=models.PROTECT,
+        null=True, blank=True,
+        related_name='vestigios_origem',
+    )
     autoridade = models.ForeignKey(
         'autoridades.Autoridade',
         on_delete=models.SET_NULL,
@@ -78,6 +88,93 @@ class Vestigio(AuditModel):
         if self.created_by:
             return self.created_by.nome_completo
         return self.responsavel_nome or '—'
+
+    def sincronizar_ocorrencia_principal(self):
+        """
+        Mantém os campos-texto `ocorrencia`/`ano_ocorrencia` espelhando a PRIMEIRA
+        ocorrência vinculada (fonte única). Esses campos saíram do formulário de
+        cadastro por serem redundantes com a vinculação (M2M), mas continuam
+        alimentando a FAV e as listagens — então são preenchidos automaticamente
+        a partir do vínculo. Limpa os campos quando não há ocorrência vinculada.
+        """
+        oc = self.ocorrencias_vinculadas.order_by('id').first()
+        self.ocorrencia     = oc.numero_ocorrencia if oc else None
+        self.ano_ocorrencia = self._extrair_ano_ocorrencia(oc) if oc else None
+        self.save(update_fields=['ocorrencia', 'ano_ocorrencia'])
+
+    @staticmethod
+    def _extrair_ano_ocorrencia(oc):
+        """
+        Ano da ocorrência a partir do PRÓPRIO número (formato AAMMNNNNN/SIGLA —
+        os 2 primeiros dígitos são o ano de registro, ex.: '26…' → 2026). O número
+        é obrigatório, então é a fonte confiável. Cai para o ano de `data_fato`
+        apenas quando o número foge do padrão (ex.: dados legados).
+        """
+        base = (oc.numero_ocorrencia or '').split('/')[0]
+        if len(base) >= 2 and base[:2].isdigit():
+            return 2000 + int(base[:2])
+        return oc.data_fato.year if oc.data_fato else None
+
+    def pode_editar_por_lotacao(self, user) -> bool:
+        """
+        Regra de edição (integridade da cadeia de custódia): alterar um vestígio
+        antes da 1ª movimentação é ato restrito a quem está lotado no SERVIÇO
+        PERICIAL onde ele foi cadastrado — não a administradores de outros
+        serviços/unidades. SUPER_ADMIN mantém break-glass.
+
+        Não verifica status/movimentações — isso é responsabilidade de quem chama
+        (perform_update e get_pode_editar fazem essas checagens com mensagens próprias).
+        """
+        if getattr(user, 'is_superuser', False) or getattr(user, 'perfil', None) == 'SUPER_ADMIN':
+            return True
+        if not self.servico_pericial_id:
+            return False
+        return user.servicos_periciais.filter(id=self.servico_pericial_id).exists()
+
+    def save(self, *args, **kwargs):
+        # Carimba o serviço de ORIGEM apenas no cadastro (INSERT). `_state.adding`
+        # é True somente antes do 1º save — em qualquer save posterior (ex.: aceite,
+        # que altera servico_pericial para a localização atual) a origem é preservada.
+        # Registros históricos carregados do banco têm adding=False → nunca são tocados.
+        #
+        # NÃO carimba para registro EXTERNO: ele não pertence a serviço pericial; o
+        # serviço informado é o DESTINO (custódia central do IC), não a origem. Para
+        # o EXTERNO, a origem é a unidade demandante (ver origem_display()).
+        _externo = bool(self.created_by_id) and getattr(self.created_by, 'perfil', None) == 'EXTERNO'
+        if (self._state.adding and self.servico_pericial_id
+                and not self.servico_pericial_origem_id and not _externo):
+            self.servico_pericial_origem_id = self.servico_pericial_id
+        super().save(*args, **kwargs)
+
+    def servicos_do_registrante(self) -> str:
+        """
+        Siglas dos serviços periciais do usuário que registrou (created_by),
+        separadas por vírgula. '' quando não há registrante (dado ETL antigo) ou
+        ele não tem serviços vinculados.
+        """
+        if not self.created_by_id:
+            return ''
+        sigs = list(self.created_by.servicos_periciais.values_list('sigla', flat=True))
+        return ', '.join(sigs)
+
+    def origem_display(self):
+        """
+        (texto, inferido) do serviço de ORIGEM para exibição:
+        - serviço explícito gravado no cadastro → (nome, False)
+        - sem registro explícito (dado histórico), mas o registrante tem serviço →
+          infere do serviço dele → (siglas, True)
+        - nada disponível → ('Não registrada', False)
+        """
+        if self.servico_pericial_origem_id:
+            return (self.servico_pericial_origem.nome, False)
+        servs = self.servicos_do_registrante()
+        if servs:
+            return (servs, True)
+        # Registrado por EXTERNO → a origem é a UNIDADE demandante (delegacia/vara),
+        # não um serviço pericial. O serviço dele é sempre o destino (custódia do IC).
+        if self.created_by_id and getattr(self.created_by, 'perfil', None) == 'EXTERNO':
+            return ('Origem externa (unidade demandante)', False)
+        return ('Não registrada (anterior ao rastreio de origem)', False)
 
     def __str__(self):
         return f"Vestígio #{self.pk} — {self.lacre or 'sem lacre'}"

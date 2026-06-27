@@ -67,6 +67,7 @@ class OrdemServicoSerializer(serializers.ModelSerializer):
             "data_primeira_visualizacao",
             "data_ciencia",
             "ip_ciencia",
+            "ciencia_automatica",
             "created_at",
             "updated_at",
             "numero_reiteracao",

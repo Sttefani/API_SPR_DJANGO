@@ -146,6 +146,22 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
 
         return OrdemServicoSerializer
 
+    # --- CIÊNCIA AUTOMÁTICA POR INÉRCIA (anti-malandragem) ---
+    def _sweep_ciencia_automatica(self):
+        """
+        Aplica a ciência automática pendente (OS em AGUARDANDO_CIENCIA há mais de
+        N dias). Chamado ao listar/abrir o dashboard — complementa o comando agendado
+        `ciencia_automatica_os`. Protegido por try/except: nunca quebra a requisição.
+        """
+        try:
+            OrdemServico.aplicar_ciencia_automatica_pendentes()
+        except Exception:
+            logger.exception("Falha ao aplicar ciência automática (sweep ao acessar)")
+
+    def list(self, request, *args, **kwargs):
+        self._sweep_ciencia_automatica()
+        return super().list(request, *args, **kwargs)
+
     # --- MÉTODO create ORIGINAL ---
     def create(self, request, *args, **kwargs):
         """Cria uma nova Ordem de Serviço com assinatura digital"""
@@ -857,6 +873,9 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"], url_path="relatorios-gerenciais")
     def relatorios_gerenciais(self, request):
         """Retorna relatórios gerenciais agregados sobre Ordens de Serviço."""
+        # Garante que a ciência automática pendente seja aplicada antes de agregar,
+        # para que os números do dashboard reflitam os prazos já em contagem.
+        self._sweep_ciencia_automatica()
         queryset_filtrado = self.filter_queryset(self.get_queryset()).annotate(
             prazo_final=Coalesce("data_prazo_efetivo", "data_prazo")
         )

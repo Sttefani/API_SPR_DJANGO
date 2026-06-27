@@ -27,6 +27,10 @@ class OrdemServico(AuditModel):
         # VENCIDA = 'VENCIDA', 'Vencida'  <- ❌ REMOVIDO (Risco 2: Ambiguidade)
         CONCLUIDA = "CONCLUIDA", "Concluída"
 
+    # Dias de tolerância para o servidor dar ciência manual antes do sistema
+    # aplicar a ciência automática por inércia (regra anti-malandragem).
+    PRAZO_CIENCIA_AUTOMATICA_DIAS = 5
+
     # --- Relação Principal ---
     ocorrencia = models.ForeignKey(
         Ocorrencia, on_delete=models.CASCADE, related_name="ordens_servico"
@@ -150,6 +154,16 @@ class OrdemServico(AuditModel):
 
     data_ciencia = models.DateTimeField(null=True, blank=True)
     ip_ciencia = models.GenericIPAddressField(null=True, blank=True)
+
+    # Ciência AUTOMÁTICA por inércia: True quando o sistema deu ciência no lugar do
+    # servidor (após PRAZO_CIENCIA_AUTOMATICA_DIAS dias sem ciência manual). Natureza
+    # jurídica distinta da ciência manual (sem assinatura pessoal / IP) — exibida na
+    # tela e no PDF para fins de controle administrativo (accountability).
+    ciencia_automatica = models.BooleanField(
+        default=False,
+        verbose_name="Ciência Automática (inércia)",
+        help_text="Ciência aplicada pelo sistema por inércia do servidor (sem ciência manual no prazo).",
+    )
 
     # ✅ NOVO CAMPO: Quem concluiu a OS
     concluida_por = models.ForeignKey(
@@ -374,6 +388,51 @@ class OrdemServico(AuditModel):
                 self.data_primeira_visualizacao = self.data_ciencia
 
             self.save()
+
+    def aplicar_ciencia_automatica(self):
+        """
+        Ciência AUTOMÁTICA por inércia: aplicada quando a OS passa
+        PRAZO_CIENCIA_AUTOMATICA_DIAS dias em AGUARDANDO_CIENCIA sem o servidor
+        dar ciência manual. Espelha tomar_ciencia(), MAS:
+          - data_ciencia é RETROATIVA ao fim do período de inércia
+            (created_at + N dias) → o servidor que enrola NÃO ganha tempo extra;
+          - não há assinatura pessoal (ciente_por permanece None, sem ip_ciencia);
+          - marca ciencia_automatica=True (para exibição e accountability).
+        Idempotente: só age se a OS ainda estiver AGUARDANDO_CIENCIA.
+        Retorna True se aplicou, False caso contrário.
+        """
+        if self.status != self.Status.AGUARDANDO_CIENCIA:
+            return False
+
+        self.data_ciencia = self.created_at + timedelta(
+            days=self.PRAZO_CIENCIA_AUTOMATICA_DIAS
+        )
+        self.ciencia_automatica = True
+        self.status = self.Status.ABERTA
+        self.data_prazo = (
+            self.data_ciencia + timedelta(days=self.prazo_dias)
+        ).date()
+        self.save()
+        return True
+
+    @classmethod
+    def aplicar_ciencia_automatica_pendentes(cls):
+        """
+        Varre as OS em inércia (AGUARDANDO_CIENCIA há >= PRAZO_CIENCIA_AUTOMATICA_DIAS
+        dias desde a emissão) e aplica a ciência automática a cada uma.
+        Barato e idempotente quando não há pendências. Retorna a quantidade aplicada.
+        Usado pelo comando agendado e pela verificação ao acessar a listagem/dashboard.
+        """
+        limite = timezone.now() - timedelta(days=cls.PRAZO_CIENCIA_AUTOMATICA_DIAS)
+        pendentes = cls.objects.filter(
+            status=cls.Status.AGUARDANDO_CIENCIA,
+            created_at__lte=limite,
+        )
+        total = 0
+        for ordem in pendentes:
+            if ordem.aplicar_ciencia_automatica():
+                total += 1
+        return total
 
     def iniciar_trabalho(self, user):
         """
