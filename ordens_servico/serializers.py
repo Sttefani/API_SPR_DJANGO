@@ -35,6 +35,22 @@ class OrdemServicoSerializer(serializers.ModelSerializer):
     procedimento = ProcedimentoCadastradoSerializer(read_only=True)
     tipo_documento_referencia = TipoDocumentoSerializer(read_only=True)
 
+    # Campos de ESCRITA (edição pelo ADMINISTRATIVO) — write_only para não poluir a
+    # leitura; permitem alterar quem ordenou e o tipo de documento no PATCH.
+    ordenada_por_id = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+        source="ordenada_por",
+        write_only=True,
+        required=False,
+    )
+    tipo_documento_referencia_id = serializers.PrimaryKeyRelatedField(
+        queryset=TipoDocumento.objects.all(),
+        source="tipo_documento_referencia",
+        write_only=True,
+        required=False,
+        allow_null=True,
+    )
+
     # Campos calculados
     data_vencimento = serializers.SerializerMethodField()
     dias_desde_emissao = serializers.SerializerMethodField()
@@ -46,6 +62,7 @@ class OrdemServicoSerializer(serializers.ModelSerializer):
     acao_necessaria = serializers.SerializerMethodField()
     reiteracoes = serializers.SerializerMethodField()
     perito_destinatario = serializers.SerializerMethodField()
+    pode_editar = serializers.SerializerMethodField()
 
     class Meta:
         model = OrdemServico
@@ -76,6 +93,8 @@ class OrdemServicoSerializer(serializers.ModelSerializer):
             "created_by",
             "updated_by",
             "ordenada_por",
+            "ordenada_por_id",
+            "tipo_documento_referencia_id",
             "ciente_por",
             "unidade_demandante",
             "autoridade_demandante",
@@ -93,6 +112,7 @@ class OrdemServicoSerializer(serializers.ModelSerializer):
             "acao_necessaria",
             "reiteracoes",
             "perito_destinatario",
+            "pode_editar",
             "concluida_com_atraso",  #
         ]
 
@@ -116,6 +136,22 @@ class OrdemServicoSerializer(serializers.ModelSerializer):
 
     def get_prazo_acumulado_total(self, obj):
         return obj.prazo_acumulado_total
+
+    def get_pode_editar(self, obj):
+        """
+        True quando o usuário logado é ADMINISTRATIVO/SUPER_ADMIN e a OS ainda pode
+        ser editada (perito não tomou ciência). Controla a exibição do botão Editar.
+        Espelha perform_update + OrdemServico.pode_ser_editada.
+        """
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        eh_admin = user.is_superuser or getattr(user, "perfil", None) in (
+            "ADMINISTRATIVO",
+            "SUPER_ADMIN",
+        )
+        return eh_admin and obj.pode_ser_editada()
 
     def get_perito_destinatario(self, obj):
         """Retorna o perito que deve cumprir esta OS"""

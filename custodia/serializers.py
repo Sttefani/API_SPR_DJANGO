@@ -311,6 +311,14 @@ class VestigioCreateSerializer(serializers.ModelSerializer):
             'descricao': {'required': True, 'allow_null': False, 'allow_blank': False},
         }
 
+    def validate_lacre(self, value):
+        """
+        Normaliza o lacre para CAIXA ALTA (sem espaços nas bordas) já na entrada,
+        garantindo que a checagem de duplicata abaixo seja case-insensitiva de fato
+        e que o valor gravado fique padronizado mesmo via API direta.
+        """
+        return value.strip().upper() if value else value
+
     def validate(self, data):
         """
         Duplicidade de vestígio. Com ocorrência/ano removidos do cadastro e o
@@ -394,6 +402,8 @@ class VestigioMovimentacaoListSerializer(serializers.ModelSerializer):
     pode_aceitar  = serializers.SerializerMethodField()
     pode_editar   = serializers.SerializerMethodField()
     sou_o_emissor = serializers.SerializerMethodField()
+    lacre_efetivo = serializers.SerializerMethodField()
+    lacre_mantido = serializers.SerializerMethodField()
 
     def get_criado_por(self, obj):
         return obj.get_responsavel()
@@ -401,8 +411,9 @@ class VestigioMovimentacaoListSerializer(serializers.ModelSerializer):
     def get_pode_editar(self, obj):
         """
         Espelha VestigioMovimentacaoViewSet.perform_update: editável apenas
-        ANTES do aceite, com vestígio não finalizado, e somente pelo criador
-        (emissor do passe) ou ADMINISTRATIVO/SUPER_ADMIN.
+        ANTES do aceite, com vestígio não finalizado, e somente por quem está
+        lotado no serviço de ORIGEM (quem enviou o passe) — SUPER_ADMIN break-glass.
+        ADMINISTRATIVO NÃO tem override (alinhado à regra de edição de vestígio).
         """
         if obj.aceito:
             return False
@@ -415,10 +426,7 @@ class VestigioMovimentacaoListSerializer(serializers.ModelSerializer):
         # EXTERNO é bloqueado no update pelo PodeCustodiar — não exibir o botão.
         if user.perfil == 'EXTERNO':
             return False
-        if (getattr(user, 'is_superuser', False)
-                or user.perfil in ('ADMINISTRATIVO', 'SUPER_ADMIN')):
-            return True
-        return obj.created_by_id == user.pk
+        return obj.pode_editar_por_lotacao(user)
 
     def get_sou_o_emissor(self, obj):
         """True se o usuário autenticado foi quem criou esta movimentação."""
@@ -450,10 +458,44 @@ class VestigioMovimentacaoListSerializer(serializers.ModelSerializer):
             return obj.unidade_demandante_id == user.unidade_demandante_id
         return False
 
+    def _resolver_lacre(self, obj):
+        """
+        (lacre_efetivo, mantido): o lacre vigente NESTA movimentação. Se a própria
+        movimentação informou um novo lacre, é ele (mantido=False). Se não informou,
+        herda o lacre mais recente informado ANTES dela; se nenhuma anterior informou,
+        herda o lacre inicial do vestígio (mantido=True). Espelha o rastreio de lacre
+        da FAV — toda movimentação referencia um lacre, tendo-o alterado ou não.
+        """
+        cache = getattr(obj, '_lacre_efetivo_cache', None)
+        if cache is not None:
+            return cache
+        if obj.lacre:
+            resultado = (obj.lacre, False)
+        else:
+            anterior = (
+                VestigioMovimentacao.objects
+                .filter(vestigio_id=obj.vestigio_id, created_at__lt=obj.created_at)
+                .exclude(lacre__isnull=True).exclude(lacre='')
+                .order_by('-created_at')
+                .values_list('lacre', flat=True)
+                .first()
+            )
+            herdado = anterior or (obj.vestigio.lacre if obj.vestigio_id else None)
+            resultado = (herdado or None, bool(herdado))
+        obj._lacre_efetivo_cache = resultado
+        return resultado
+
+    def get_lacre_efetivo(self, obj):
+        return self._resolver_lacre(obj)[0]
+
+    def get_lacre_mantido(self, obj):
+        return self._resolver_lacre(obj)[1]
+
     class Meta:
         model = VestigioMovimentacao
         fields = [
-            'id', 'vestigio', 'lacre', 'num_processo_sei', 'descricao',
+            'id', 'vestigio', 'lacre', 'lacre_efetivo', 'lacre_mantido',
+            'num_processo_sei', 'descricao',
             'aceito', 'data_hora_aceito',
             'unidade_demandante', 'servico_pericial', 'autoridade_nome',
             'user_destino', 'criado_por', 'created_at', 'pode_aceitar', 'pode_editar', 'sou_o_emissor',

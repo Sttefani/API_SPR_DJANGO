@@ -45,6 +45,19 @@ class UserCreateSerializer(serializers.ModelSerializer):
             )
         ],
     )
+    # Matrícula funcional — capturada já no autocadastro (não é única). Antes ficava
+    # ausente na tela de registro e o SUPER_ADMIN precisava preencher na edição; com
+    # isso pronto, o protocolo de saída já puxa nome + matrícula pelo CPF.
+    matricula = serializers.CharField(
+        max_length=30,
+        required=True,
+        allow_blank=False,
+        trim_whitespace=True,
+        error_messages={
+            "required": "A matrícula funcional é obrigatória.",
+            "blank": "A matrícula funcional é obrigatória.",
+        },
+    )
 
     class Meta:
         model = User
@@ -54,6 +67,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
             "data_nascimento",
             "cpf",
             "telefone_celular",
+            "matricula",
             "password",
         ]
         extra_kwargs = {

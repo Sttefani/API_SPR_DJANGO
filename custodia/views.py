@@ -669,7 +669,10 @@ class VestigioViewSet(viewsets.ModelViewSet):
                 filtro |= _Q(id=int(valor))
             qs = qs.filter(filtro)
 
-        qs = qs.only('id', 'lacre', 'ocorrencia', 'ano_ocorrencia', 'status')[:20]
+        # select_related(None) limpa os joins herdados de get_queryset() — sem isso o
+        # .only() abaixo defere created_by/updated_by que o select_related quer traversar,
+        # gerando FieldError (500). Este endpoint não acessa nenhum FK, só campos diretos.
+        qs = qs.select_related(None).only('id', 'lacre', 'ocorrencia', 'ano_ocorrencia', 'status')[:20]
         data = [
             {
                 'id': v.id,
@@ -956,7 +959,8 @@ class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
         Regras:
         - Vestígio FINALIZADO não aceita edição.
         - Movimentação já aceita não pode ser editada (MovimentacaoJaFoiAceitaException).
-        - Apenas o criador pode editar; ADMIN/SUPER_ADMIN podem sempre.
+        - Editável apenas por quem está lotado no serviço de ORIGEM (quem enviou o
+          passe); SUPER_ADMIN é break-glass. ADMINISTRATIVO não tem override.
         """
         instance = serializer.instance  # já carregado pelo DRF — sem double-fetch
         user = self.request.user
@@ -968,16 +972,13 @@ class VestigioMovimentacaoViewSet(viewsets.ModelViewSet):
 
         if instance.aceito:
             raise ValidationError(
-                {'detail': 'Essa movimentação não pode ser editada pois já foi aceita.'}
+                {'detail': 'Essa movimentação não pode ser editada pois já foi aceita pelo usuário de destino.'}
             )
 
-        _is_admin = (
-            user.perfil in {User.Perfil.ADMINISTRATIVO, User.Perfil.SUPER_ADMIN}
-            or user.is_superuser
-        )
-        if not _is_admin and instance.created_by != user:
+        if not instance.pode_editar_por_lotacao(user):
             raise ValidationError(
-                {'detail': 'Usuário não tem permissão para editar essa movimentação.'}
+                {'detail': 'Somente usuários lotados no serviço de origem da movimentação '
+                           'podem editá-la enquanto não for aceita.'}
             )
 
         serializer.save(updated_by=user)

@@ -1089,12 +1089,16 @@ class EdicaoVestigioTest(CustodiaBaseTest):
 
 class EdicaoMovimentacaoTest(CustodiaBaseTest):
     """
-    A movimentação pode ser editada pelo criador (emissor) enquanto não for
-    aceita. Após o aceite, torna-se imutável (cadeia de custódia).
+    A movimentação pode ser editada enquanto NÃO for aceita, apenas por quem está
+    lotado no serviço de ORIGEM (quem enviou o passe). SUPER_ADMIN é break-glass;
+    ADMINISTRATIVO NÃO tem override. Após o aceite torna-se imutável para todos.
     """
 
     def setUp(self):
         super().setUp()
+        # Perito lotado no serviço de origem (onde o vestígio foi cadastrado) — é
+        # quem pode editar a movimentação pendente, conforme a regra de lotação.
+        self.perito.servicos_periciais.add(self.servico)
         r_vest = self._criar_vestigio_via_api()
         self.vest_id = r_vest.data['id']
         r_mov = self._criar_movimentacao_via_api(self.vest_id, usuario=self.perito)
@@ -1104,12 +1108,29 @@ class EdicaoMovimentacaoTest(CustodiaBaseTest):
         self.autenticar(usuario)
         return self.client.patch(f'/api/custodia/movimentacoes/{self.mov_id}/', dados)
 
-    def test_criador_edita_movimentacao_pendente(self):
-        r = self._patch(self.perito, {'lacre': 'LACRE-NOVO-1', 'descricao': 'Corrigido'})
+    def test_lotado_na_origem_edita_movimentacao_pendente(self):
+        # 'lacre-novo-1' minúsculo deve ser gravado em CAIXA ALTA (save() do modelo)
+        r = self._patch(self.perito, {'lacre': 'lacre-novo-1', 'descricao': 'Corrigido'})
         self.assertEqual(r.status_code, status.HTTP_200_OK)
         mov = VestigioMovimentacao.objects.get(pk=self.mov_id)
         self.assertEqual(mov.lacre, 'LACRE-NOVO-1')
         self.assertEqual(mov.descricao, 'Corrigido')
+
+    def test_admin_sem_lotacao_nao_edita(self):
+        """ADMINISTRATIVO vê tudo, mas sem lotação na origem é barrado (400)."""
+        r = self._patch(self.admin, {'descricao': 'tentativa admin'})
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_perito_de_outro_servico_nao_edita(self):
+        """Perito de outro serviço nem enxerga a movimentação → 404 (opaco)."""
+        outro = _criar_usuario('peritoMov@test.com', perfil=User.Perfil.PERITO)
+        outro.servicos_periciais.add(_criar_servico('BIO', 'Biologia'))
+        r = self._patch(outro, {'descricao': 'tentativa'})
+        self.assertEqual(r.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_super_admin_edita(self):
+        r = self._patch(self.super_admin, {'descricao': 'break-glass'})
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
 
     def test_nao_edita_apos_aceite(self):
         self._aceitar_movimentacao(self.mov_id, usuario=self.custodiante)
@@ -1132,6 +1153,54 @@ class EdicaoMovimentacaoTest(CustodiaBaseTest):
             f'/api/custodia/movimentacoes/{self.mov_id}/', {'descricao': 'tentativa'}
         )
         self.assertIn(r.status_code, (status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND))
+
+
+# ---------------------------------------------------------------------------
+# 17b. Lacre efetivo — toda movimentação referencia um lacre (mudando ou não)
+# ---------------------------------------------------------------------------
+
+class LacreEfetivoMovimentacaoTest(CustodiaBaseTest):
+    """
+    Na listagem/timeline, TODA movimentação referencia um lacre: a que troca
+    mostra o novo; a que não troca herda o lacre vigente (lacre_mantido=True).
+    Espelha o rastreio de lacre da FAV.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.perito.servicos_periciais.add(self.servico)
+        self.vest = _criar_vestigio(self.unidade, self.servico, self.perito, lacre='INIT-1')
+
+    def test_segunda_movimentacao_herda_lacre_vigente(self):
+        import datetime
+        from django.utils import timezone
+
+        m1 = VestigioMovimentacao.objects.create(vestigio=self.vest, lacre='a44444', created_by=self.perito)
+        m2 = VestigioMovimentacao.objects.create(vestigio=self.vest, lacre='', created_by=self.perito)
+        # ordem cronológica determinística (m1 antes de m2)
+        t0 = timezone.now()
+        VestigioMovimentacao.objects.filter(pk=m1.pk).update(created_at=t0)
+        VestigioMovimentacao.objects.filter(pk=m2.pk).update(created_at=t0 + datetime.timedelta(seconds=5))
+
+        self.autenticar(self.perito)
+        movs = self.client.get(f'/api/custodia/vestigios/{self.vest.pk}/movimentacoes/').data
+        by_id = {m['id']: m for m in movs}
+
+        # 1ª trocou o lacre → mostra o novo (em CAIXA ALTA), não é "mantido"
+        self.assertEqual(by_id[m1.id]['lacre_efetivo'], 'A44444')
+        self.assertFalse(by_id[m1.id]['lacre_mantido'])
+        # 2ª não trocou → herda 'A44444' e marca como mantido
+        self.assertEqual(by_id[m2.id]['lacre_efetivo'], 'A44444')
+        self.assertTrue(by_id[m2.id]['lacre_mantido'])
+
+    def test_movimentacao_sem_troca_herda_lacre_inicial_do_vestigio(self):
+        """Sem nenhuma troca anterior, herda o lacre inicial do próprio vestígio."""
+        m = VestigioMovimentacao.objects.create(vestigio=self.vest, lacre='', created_by=self.perito)
+        self.autenticar(self.perito)
+        movs = self.client.get(f'/api/custodia/vestigios/{self.vest.pk}/movimentacoes/').data
+        d = next(x for x in movs if x['id'] == m.id)
+        self.assertEqual(d['lacre_efetivo'], 'INIT-1')
+        self.assertTrue(d['lacre_mantido'])
 
 
 # ---------------------------------------------------------------------------

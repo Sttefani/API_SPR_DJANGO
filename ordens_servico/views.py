@@ -22,6 +22,7 @@ from django.db.models import (
 from django.db.models.functions import TruncDate, Coalesce
 from datetime import timedelta
 from django.core.exceptions import ValidationError  # Para try/except em reiterar
+from rest_framework.exceptions import ValidationError as APIValidationError  # 400 no perform_update
 
 from .models import OrdemServico
 from .serializers import (
@@ -265,7 +266,19 @@ class OrdemServicoViewSet(viewsets.ModelViewSet):
 
     # --- MÉTODO perform_update ORIGINAL ---
     def perform_update(self, serializer):
-        """Registra quem atualizou"""
+        """
+        Registra quem atualizou — e impõe a regra de edição: o ADMINISTRATIVO só
+        pode editar a OS enquanto ainda NÃO houve ciência (AGUARDANDO_CIENCIA).
+        Qualquer ciência — manual do perito OU automática por inércia — trava a
+        edição; alterações posteriores devem passar por reiteração.
+        """
+        instance = serializer.instance
+        if not instance.pode_ser_editada():
+            raise APIValidationError(
+                {"detail": "Esta Ordem de Serviço não pode mais ser editada porque já houve "
+                           "ciência (do perito ou automática por inércia). Para alterações "
+                           "posteriores, use a reiteração."}
+            )
         serializer.save(updated_by=self.request.user)
 
     # --- MÉTODO destroy ORIGINAL ---

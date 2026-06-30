@@ -132,6 +132,12 @@ class Vestigio(AuditModel):
         return user.servicos_periciais.filter(id=self.servico_pericial_id).exists()
 
     def save(self, *args, **kwargs):
+        # Lacre sempre em CAIXA ALTA no banco — independente de como foi digitado
+        # (formulário, API direta, shell, importação). Garantia de última instância
+        # da padronização forense; espelha o uppercase automático do modelo DNA.
+        if self.lacre:
+            self.lacre = self.lacre.strip().upper()
+
         # Carimba o serviço de ORIGEM apenas no cadastro (INSERT). `_state.adding`
         # é True somente antes do 1º save — em qualquer save posterior (ex.: aceite,
         # que altera servico_pericial para a localização atual) a origem é preservada.
@@ -231,6 +237,32 @@ class VestigioMovimentacao(AuditModel):
         max_length=255, blank=True, null=True,
         help_text='Nome do responsável — usado quando created_by não está disponível.'
     )
+
+    def save(self, *args, **kwargs):
+        # Lacre da movimentação sempre em CAIXA ALTA — mesma padronização do
+        # Vestigio.lacre. Garante uppercase no histórico de lacres exibido na FAV,
+        # independente de como o usuário digitou no toggle "Novo lacre? SIM".
+        if self.lacre:
+            self.lacre = self.lacre.strip().upper()
+        super().save(*args, **kwargs)
+
+    def pode_editar_por_lotacao(self, user) -> bool:
+        """
+        Edição de movimentação PENDENTE: restrita a quem está lotado no serviço
+        de ORIGEM — o serviço que detém o vestígio (quem ENVIOU o passe). Como o
+        aceite ainda não ocorreu, a localização atual do vestígio
+        (vestigio.servico_pericial) É a origem. SUPER_ADMIN é break-glass;
+        ADMINISTRATIVO NÃO tem override (mesma regra de Vestigio.pode_editar_por_lotacao).
+
+        Não verifica aceito/finalizado — isso é responsabilidade de quem chama
+        (perform_update e get_pode_editar fazem essas checagens com mensagens próprias).
+        """
+        if getattr(user, 'is_superuser', False) or getattr(user, 'perfil', None) == 'SUPER_ADMIN':
+            return True
+        origem_id = self.vestigio.servico_pericial_id
+        if not origem_id:
+            return False
+        return user.servicos_periciais.filter(id=origem_id).exists()
 
     def get_responsavel(self) -> str:
         """Retorna o nome do responsável, priorizando o usuário Django."""

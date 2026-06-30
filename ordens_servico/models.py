@@ -358,6 +358,15 @@ class OrdemServico(AuditModel):
     def ocultar_detalhes_ate_ciencia(self):
         return self.status == self.Status.AGUARDANDO_CIENCIA
 
+    def pode_ser_editada(self) -> bool:
+        """
+        A OS só pode ser editada pelo ADMINISTRATIVO enquanto ainda NÃO houve ciência
+        — ou seja, enquanto está em AGUARDANDO_CIENCIA. Qualquer ciência trava a edição:
+        tanto a ciência manual do perito quanto a ciência AUTOMÁTICA por inércia (decurso
+        do prazo) levam a OS para ABERTA. A partir daí, alterações só via reiteração.
+        """
+        return self.status == self.Status.AGUARDANDO_CIENCIA
+
     def registrar_visualizacao(self):
         """
         Registra a primeira vez que o perito visualizou a OS.

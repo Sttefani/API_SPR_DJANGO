@@ -37,6 +37,12 @@ ALERTA_CORPO   = colors.HexColor('#fee2e2')    # vermelho claro (corpo do box)
 ALERTA_BORDA   = colors.HexColor('#dc2626')    # vermelho (bordas)
 ALERTA_TEXTO   = colors.HexColor('#dc2626')    # vermelho (texto inline)
 
+# Selo de contraprova — tom ardósia neutro (classificação, não alarme;
+# vermelho fica reservado à não-conformidade)
+CONTRAPROVA_FUNDO = colors.HexColor('#334155')  # ardósia escuro (header do box)
+CONTRAPROVA_CORPO = colors.HexColor('#f1f5f9')  # ardósia claro (corpo do box)
+CONTRAPROVA_BORDA = colors.HexColor('#475569')  # ardósia (bordas)
+
 
 # ─── Utilitários ─────────────────────────────────────────────────────────────
 
@@ -192,6 +198,58 @@ def _box_nao_conforme(story, st, lacre=None):
         # Borda externa vermelha
         ('BOX',           (0, 0), (-1, -1), 1.5, ALERTA_BORDA),
         ('LINEBELOW',     (0, 0), (0, 0), 0.5, ALERTA_BORDA),
+    ]))
+
+    story.append(Spacer(1, 0.3 * cm))
+    story.append(tbl)
+    story.append(Spacer(1, 0.3 * cm))
+
+
+def _box_contraprova(story, st, original):
+    """
+    Insere um selo neutro (ardósia) identificando o vestígio como CONTRAPROVA,
+    logo após o cabeçalho (e após o box de não-conformidade, se houver). Sinaliza
+    a classificação material do documento na primeira olhada — complementa, não
+    substitui, a linha "Vestígio original" da seção Situação Atual.
+    """
+    st_header = ParagraphStyle(
+        'cp_header', parent=st['subtitulo'],
+        fontSize=10, textColor=BRANCO,
+        fontName='Helvetica-Bold', leading=14,
+    )
+    st_corpo = ParagraphStyle(
+        'cp_corpo', parent=st['label'],
+        fontSize=8, textColor=CINZA_ESCURO,
+        fontName='Helvetica', leading=12,
+    )
+
+    orig_lacre = original.lacre or f'#{original.id}'
+
+    header_cell = Paragraph('◈  VESTÍGIO DE CONTRAPROVA', st_header)
+    corpo_cell = Paragraph(
+        f'Este vestígio é a <b>contraprova</b> do vestígio original — '
+        f'Lacre <b>{orig_lacre}</b> (Nº Registro #{original.id}). '
+        'Amostra de reserva destinada a eventual reanálise pericial independente.',
+        st_corpo,
+    )
+
+    tbl = Table([[header_cell], [corpo_cell]], colWidths=[17.4 * cm])
+    tbl.setStyle(TableStyle([
+        # Header ardósia
+        ('BACKGROUND',    (0, 0), (0, 0), CONTRAPROVA_FUNDO),
+        ('TEXTCOLOR',     (0, 0), (0, 0), BRANCO),
+        ('ALIGN',         (0, 0), (0, 0), 'CENTER'),
+        ('TOPPADDING',    (0, 0), (0, 0), 7),
+        ('BOTTOMPADDING', (0, 0), (0, 0), 7),
+        # Corpo ardósia claro
+        ('BACKGROUND',    (0, 1), (0, 1), CONTRAPROVA_CORPO),
+        ('TOPPADDING',    (0, 1), (0, 1), 6),
+        ('BOTTOMPADDING', (0, 1), (0, 1), 6),
+        ('LEFTPADDING',   (0, 1), (0, 1), 8),
+        ('RIGHTPADDING',  (0, 1), (0, 1), 8),
+        # Borda externa
+        ('BOX',           (0, 0), (-1, -1), 1.5, CONTRAPROVA_BORDA),
+        ('LINEBELOW',     (0, 0), (0, 0), 0.5, CONTRAPROVA_BORDA),
     ]))
 
     story.append(Spacer(1, 0.3 * cm))
@@ -431,6 +489,10 @@ def gerar_ficha_vestigio(vestigio, request):
     if not vestigio.conformidade:
         _box_nao_conforme(story, st, lacre=vestigio.lacre)
 
+    # ── Selo de contraprova (logo após o cabeçalho / box de não-conformidade) ─────
+    if vestigio.vestigio_contra_prova_id:
+        _box_contraprova(story, st, vestigio.vestigio_contra_prova)
+
     # ── Seção 1: Identificação ────────────────────────────────────────────────────
     _adicionar_secao(story, st, '1. IDENTIFICAÇÃO DO VESTÍGIO')
 
@@ -457,11 +519,9 @@ def gerar_ficha_vestigio(vestigio, request):
         _linha('Serviço de origem',
                _orig_txt + (' (serviço do registrante)' if _orig_inf else '')),
         _linha('Unidade Demandante', str(vestigio.unidade_demandante) if vestigio.unidade_demandante else '—'),
-        _linha('Autoridade requisitante', str(vestigio.autoridade) if vestigio.autoridade else '—'),
         _linha('Registrado por',
                vestigio.get_responsavel() + (f' ({_reg_serv})' if _reg_serv else '')),
         _linha('Data / Hora Registro', _formatar_dt(vestigio.created_at)),
-        _linha('', ''),  # padding de grade
     ]
 
     grid_rows = []
